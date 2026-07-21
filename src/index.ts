@@ -5,6 +5,7 @@ import { OrderSide, OrderStatus } from '@prisma/client';
 import { loadEnvConfig, getGridConfigFromEnv } from './config';
 import { StateRepository } from './db/repository';
 import { CcxtExchangeAdapter, IExchangeAdapter } from './exchange/adapter';
+import { CcxtExchangeStreams, IExchangeStreams } from './exchange/streams';
 import { GridManager } from './core/gridManager';
 import { RiskGuard } from './core/riskGuard';
 import { Bootstrapper } from './core/bootstrapper';
@@ -101,7 +102,22 @@ async function main() {
   const volatilityEngine = new LiveVolatilityEngine(15);
   const matchingEngine = new LocalMatchingEngine(repository, systemBus);
 
-  // Listener para realizar el "Flip" cuando el Matching Engine notifique que una orden virtual se ejecutó
+  // Si DRY_RUN === false (Ejecución real en Binance Spot), conectar WebSocket privado watchOrders()
+  let exchangeStreams: IExchangeStreams | null = null;
+  if (!env.DRY_RUN && env.EXCHANGE_API_KEY && env.EXCHANGE_API_SECRET) {
+    console.log(`[Live Mode] 🔴 MODO PRODUCCIÓN REAL ACTIVADO: Conectando a WebSocket privado de cuenta Binance (watchOrders)...`);
+    const liveStreams = new CcxtExchangeStreams(exchangeConfig);
+    await liveStreams.initialize();
+    await liveStreams.subscribeOrders(symbol);
+    exchangeStreams = liveStreams;
+
+    exchangeStreams.on('order:filled', (event) => {
+      console.log(`[Live WS Order Stream] ⚡ Orden ejecutada en Binance en vivo: ${event.side.toUpperCase()} ${event.amount} @ $${event.price.toFixed(2)}`);
+      systemBus.emit('ORDER_FILLED', event);
+    });
+  }
+
+  // Listener para realizar el "Flip" cuando se reciba una notificación de orden ejecutada (Matching Engine local o WebSocket privado de Binance)
   systemBus.on('ORDER_FILLED', async (event) => {
     console.log(`[Flip Event Bus] ⚡ ORDER_FILLED recibida para Nivel ${event.gridLevel}. Generando contra-orden ("Flip")...`);
 
@@ -125,7 +141,6 @@ async function main() {
         status: OrderStatus.OPEN,
       });
 
-      // Actualizar isHolding en el nivel correspondiente
       await repository.upsertGridLevel(flipPlan.levelIndex, flipPlan.price, flipPlan.side === 'sell');
 
       console.log(`[Flip Executed] 🔄 Contra-orden ("Flip") ${flipPlan.side.toUpperCase()} colocada a $${flipPlan.price.toFixed(2)} USD (Nivel ${flipPlan.levelIndex})`);
@@ -140,7 +155,7 @@ async function main() {
   const openOrdersInDb = await repository.getOpenOrders();
 
   if (openOrdersInDb.length === 0) {
-    console.log('[Seeding] Generando órdenes de siembra iniciales con UUID v4...');
+    console.log('[Seeding] Generando órdenes de siembra iniciales...');
     const seedPlans = gridManager.generateSeedOrders(currentPrice);
 
     for (const plan of seedPlans) {
@@ -237,17 +252,18 @@ async function main() {
 
   await volatilityEngine.start(symbol, env.ATR_TIMEFRAME, env.ATR_PERIOD);
 
-  // 10. Bucle de Tickers de Mercado en Vivo -> Alimentar LocalMatchingEngine
+  // 10. Bucle de Tickers de Mercado en Vivo
   console.log('====================================================');
-  console.log('🟢 BOT OPERANDO EN TIEMPO REAL - MATCHING ENGINE EN VIVO');
+  console.log('🟢 BOT OPERANDO EN TIEMPO REAL');
   console.log('====================================================');
 
   const tickerInterval = setInterval(async () => {
     try {
       const ticker = await exchangeAdapter.fetchTicker(symbol);
 
-      // Alimentar el LocalMatchingEngine con el precio de mercado en vivo para emparejar órdenes virtuales en PostgreSQL
-      await matchingEngine.processLivePrice(ticker.last);
+      if (env.DRY_RUN) {
+        await matchingEngine.processLivePrice(ticker.last);
+      }
 
       const isOutOfBounds = ticker.last.lessThan(gridManager.getConfig().lowerPrice) || ticker.last.greaterThan(gridManager.getConfig().upperPrice);
       if (isOutOfBounds) {
@@ -263,6 +279,9 @@ async function main() {
     console.log(`\n[Shutdown] Recibida señal ${signal}. Cerrando bot de forma graciosa...`);
     clearInterval(tickerInterval);
     volatilityEngine.stop();
+    if (exchangeStreams) {
+      await exchangeStreams.close();
+    }
     await repository.disconnect();
     process.exit(0);
   };

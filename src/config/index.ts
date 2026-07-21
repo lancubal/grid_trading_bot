@@ -40,10 +40,12 @@ export const EnvSchema = z.object({
   // Base de Datos PostgreSQL
   DATABASE_URL: z.string().url(),
 
-  // Exchange Config
+  // Exchange Config (Soporte dual para EXCHANGE_API_KEY / BINANCE_API_KEY)
   EXCHANGE_ID: z.string().default('binance'),
   EXCHANGE_API_KEY: z.string().optional().default(''),
   EXCHANGE_API_SECRET: z.string().optional().default(''),
+  BINANCE_API_KEY: z.string().optional().default(''),
+  BINANCE_API_SECRET: z.string().optional().default(''),
   EXCHANGE_TESTNET: z
     .string()
     .transform((val) => val.toLowerCase() === 'true')
@@ -58,7 +60,18 @@ export function loadEnvConfig(): EnvConfig {
     console.error('❌ Configuración de entorno no válida:', parsed.error.format());
     throw new Error('Configuración de entorno inválida.');
   }
-  return parsed.data;
+
+  const data = parsed.data;
+
+  // Unificar llaves si se especifican BINANCE_API_KEY / BINANCE_API_SECRET
+  if (data.BINANCE_API_KEY && !data.EXCHANGE_API_KEY) {
+    data.EXCHANGE_API_KEY = data.BINANCE_API_KEY;
+  }
+  if (data.BINANCE_API_SECRET && !data.EXCHANGE_API_SECRET) {
+    data.EXCHANGE_API_SECRET = data.BINANCE_API_SECRET;
+  }
+
+  return data;
 }
 
 export interface GridConfigInput {
@@ -74,7 +87,6 @@ export interface GridConfigInput {
 }
 
 export function getGridConfigFromEnv(env: EnvConfig): GridConfigInput {
-  // Rango inicial fallback si no se especifican precios explícitos
   const lowerPrice = new Decimal(process.env.GRID_LOWER_PRICE || '63000.00');
   const upperPrice = new Decimal(process.env.GRID_UPPER_PRICE || '66000.00');
 

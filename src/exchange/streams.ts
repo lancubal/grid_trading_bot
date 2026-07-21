@@ -5,6 +5,7 @@ import { OrderExecutionEvent, OrderExecutionEventSchema } from '../types';
 import { ExchangeConfig } from './adapter';
 
 export interface IExchangeStreams extends EventEmitter {
+  initialize?(): Promise<void>;
   subscribeOrders(symbol: string): Promise<void>;
   subscribeTicker(symbol: string): Promise<void>;
   close(): Promise<void>;
