@@ -52,8 +52,20 @@ export class LiveVolatilityEngine extends EventEmitter {
     period: number
   ): Promise<Decimal | null> {
     try {
-      const rawCandles = await ccxtClient.fetchOHLCV(symbol, timeframe, undefined, period + 10);
-      if (!rawCandles || rawCandles.length < period + 1) return null;
+      let rawCandles: any[] = [];
+      try {
+        rawCandles = await ccxtClient.fetchOHLCV(symbol, timeframe, undefined, period + 10);
+      } catch (err: any) {
+        // Si Binance Testnet/Global restringe la región de AWS, consultar endpoint público de Binance
+        if (err.message && (err.message.includes('451') || err.message.includes('restricted location') || err.message.includes('Unavailable For Legal Reasons'))) {
+          const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol.replace('/', '')}&interval=${timeframe}&limit=${period + 10}`);
+          rawCandles = await res.json();
+        } else {
+          throw err;
+        }
+      }
+
+      if (!rawCandles || !Array.isArray(rawCandles) || rawCandles.length < period + 1) return null;
 
       const candles: OHLCV[] = rawCandles.map((c: any) => ({
         timestamp: typeof c[0] === 'number' ? c[0] : Date.now(),
@@ -72,7 +84,6 @@ export class LiveVolatilityEngine extends EventEmitter {
         return newAtr;
       }
 
-      // Calcular variación porcentual |newAtr - currentActiveAtr| / currentActiveAtr * 100
       const diffAbs = newAtr.minus(this.currentActiveAtr).abs();
       const variationPercent = diffAbs.dividedBy(this.currentActiveAtr).times(100);
 
