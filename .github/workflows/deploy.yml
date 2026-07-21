@@ -1,0 +1,62 @@
+name: 🚀 CI/CD Pipeline - Test & Deploy to AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: 🧪 Run Unit Tests & Build Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: 📦 Install Dependencies
+        run: npm ci
+
+      - name: 🛠️ Generate Prisma Client
+        run: npx prisma generate
+
+      - name: ⚙️ Compile TypeScript
+        run: npm run build
+
+      - name: 🧪 Run Vitest Test Suite
+        run: npm test
+
+  deploy:
+    name: 🚢 Deploy to AWS EC2 via SSH
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Deploy to AWS EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.AWS_HOST }}
+          username: ${{ secrets.AWS_USERNAME }}
+          key: ${{ secrets.AWS_SSH_KEY }}
+          script: |
+            cd /home/ubuntu/grid_trading_bot || git clone git@github.com:lancubal/grid_trading_bot.git /home/ubuntu/grid_trading_bot
+            cd /home/ubuntu/grid_trading_bot
+            git fetch --all
+            git reset --hard origin/main
+            
+            # Escribir variables de entorno de producción
+            echo "${{ secrets.ENV_FILE }}" > .env
+            
+            # Levantar contenedores Docker en segundo plano
+            docker-compose up -d --build
+            docker-compose ps

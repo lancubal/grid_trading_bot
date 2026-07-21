@@ -1,6 +1,6 @@
 # 🤖 Bot de Grid Trading para BTC (Bitcoin)
 
-Bot de trading algorítmico autónomo desarrollado en Node.js y TypeScript, especializado en el mercado de Bitcoin (BTC). Diseñado para operar en entornos de alta disponibilidad y aprovechar la volatilidad intradiaria mediante rangos de precios definidos.
+Bot de trading algorítmico autónomo desarrollado en Node.js y TypeScript, especializado en el mercado de Bitcoin (BTC). Diseñado para operar en entornos de alta disponibilidad y aprovechar la volatilidad intradiaria mediante rangos adaptativos por **ATR (Average True Range)**.
 
 ---
 
@@ -33,23 +33,28 @@ El simulador de backtesting descarga datos reales de **velas de 1 minuto (`1m OH
 
 ---
 
-## 🏗️ Arquitectura del Sistema
+## 🚀 Despliegue en AWS con GitHub Actions CI/CD
 
-El sistema utiliza una arquitectura modular y orientada a eventos dividida en tres capas principales:
+El repositorio incluye un pipeline automatizado en [`.github/workflows/deploy.yml`](file:///home/luna/repos/dayTradingBot/.github/workflows/deploy.yml) y una guía detallada en [`AWS_DEPLOYMENT_GUIDE.md`](file:///home/luna/repos/dayTradingBot/AWS_DEPLOYMENT_GUIDE.md) para desplegar el bot en una instancia **AWS EC2** con Docker Compose.
+
+---
+
+## 🏗️ Arquitectura del Sistema
 
 ```mermaid
 graph TD
     subgraph Connection Layer
-        EA[Exchange Adapter]
-        WS[Exchange Streams - WebSockets]
+        EA[Exchange Adapter & Proxy Interceptor]
+        WS[Live Market Ticker Stream]
         REST[REST API - Orders]
     end
 
     subgraph Strategy Layer
         GE[Grid Engine - Core Logic]
+        LVE[Live Volatility Engine - ATR 14]
+        LME[Local Matching Engine - Virtual Execution]
         BM[Bootstrapper - Crash Recovery]
         RG[RiskGuard - Maker Enforcement]
-        BT[GridBacktester - Historical Simulation]
     end
 
     subgraph Persistence Layer
@@ -57,15 +62,14 @@ graph TD
         DB[(PostgreSQL)]
     end
 
-    WS -->|Real-time Fills| GE
-    EA -->|Events: order:filled| GE
+    WS -->|Real-time Market Ticks| LME
+    WS -->|1h Candles| LVE
+    LVE -->|VOLATILITY_CHANGE| GE
+    LME -->|ORDER_FILLED| GE
     GE -->|Validate Order| RG
     BM -->|Reconcile State| DB
-    BM -->|Reconcile Fills| EA
-    GE -->|Events: order:create / order:cancel| EA
     GE -->|Events: state:update| SM
     SM -->|Read / Write| DB
-    EA -->|Execute REST| REST
 ```
 
 ---
@@ -73,27 +77,27 @@ graph TD
 ## 📁 Estructura de Directorios
 
 ```plaintext
+.github/
+└── workflows/          # Pipeline CI/CD automatizado para AWS EC2
 src/
 ├── config/             # Variables de entorno y validación de configuración de grilla (Zod)
-├── core/               # Lógica de negocio pura, Reconciliación y Tests
+├── core/               # Lógica de negocio pura, Reconciliación, Matching Engine y ATR
+│   ├── atrCalculator.ts
 │   ├── bootstrapper.ts
-│   ├── bootstrapper.test.ts
 │   ├── gridManager.ts
-│   ├── gridManager.test.ts
+│   ├── matchingEngine.ts
 │   ├── riskGuard.ts
-│   └── riskGuard.test.ts
+│   └── volatility.ts
 ├── backtest/           # Módulo de simulación histórica sobre velas OHLCV 1m
 │   ├── backtester.ts
-│   ├── backtester.test.ts
 │   ├── batch.ts
 │   └── run.ts
-├── exchange/           # Capa de infraestructura externa (CCXT REST Wrapper & WS Streams)
+├── exchange/           # Capa de infraestructura (CCXT Adapter, Shadow Proxy & WS)
 │   ├── adapter.ts
-│   ├── streams.ts
-│   └── streams.test.ts
+│   ├── shadowAdapter.ts
+│   └── streams.ts
 ├── db/                 # Capa de persistencia (ORM Prisma & Repositorio de Estado)
 │   └── repository.ts
-├── types/              # Interfaces globales, eventos y esquemas de Zod
 └── index.ts            # Punto de entrada (Bootstrapping, Siembra e Integración)
 ```
 
@@ -102,39 +106,10 @@ src/
 ## 🛠️ Stack Tecnológico & Testing
 
 - **Lenguaje:** TypeScript / Node.js
-- **Exchange API:** CCXT (Binance Testnet / Live WS streams gratis).
-- **Testing:** Vitest (19/19 tests unitarios pasados).
+- **Exchange API:** CCXT (Binance Spot API público).
+- **Testing:** Vitest (24/24 tests unitarios pasados).
 - **Base de Datos:** PostgreSQL + Prisma ORM.
 - **Validación de Datos:** Zod.
 - **Manejo de Eventos:** `EventEmitter` (nativo de Node.js).
 - **Precisión Numérica:** Decimal.js.
-- **Despliegue:** Docker (`Dockerfile` y `docker-compose.yml`).
-
----
-
-## 🚀 Comandos Principales
-
-### Ejecutar Backtest Histórico Individual:
-```bash
-npm run backtest
-```
-
-### Ejecutar Batch Backtest con Caché Local (90 días):
-```bash
-npm run backtest:batch
-```
-
-### Ejecutar Suite de Tests:
-```bash
-npm test
-```
-
-### Compilar Proyecto:
-```bash
-npm run build
-```
-
-### Desarrollo Local:
-```bash
-npm run dev
-```
+- **Despliegue:** Docker (`Dockerfile` y `docker-compose.yml`) + GitHub Actions CI/CD.
