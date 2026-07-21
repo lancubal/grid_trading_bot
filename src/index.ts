@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { EventEmitter } from 'events';
 import ccxt from 'ccxt';
 import Decimal from 'decimal.js';
 import { OrderSide, OrderStatus } from '@prisma/client';
@@ -10,6 +11,7 @@ import { RiskGuard } from './core/riskGuard';
 import { Bootstrapper } from './core/bootstrapper';
 import { AtrCalculator } from './core/atrCalculator';
 import { LiveVolatilityEngine } from './core/volatility';
+import { LocalMatchingEngine } from './core/matchingEngine';
 import { OHLCV } from './backtest/backtester';
 
 async function main() {
@@ -22,6 +24,8 @@ async function main() {
 
   console.log(`[Config] Entorno: ${env.NODE_ENV} | Modo DRY_RUN (Shadow Trading): ${env.DRY_RUN}`);
   console.log(`[Config ATR] Período: ${env.ATR_PERIOD} | Timeframe: ${env.ATR_TIMEFRAME} | Rango: $${env.MIN_GRID_RANGE_USD} - $${env.MAX_GRID_RANGE_USD} USD`);
+
+  const systemBus = new EventEmitter();
 
   // 1. Inicializar Repositorio de Estado DB
   const repository = new StateRepository();
@@ -79,9 +83,38 @@ async function main() {
 
   console.log(`[Grid Bounds] Piso: $${adjustedGrid.newLowerPrice.toFixed(2)} | Techo: $${adjustedGrid.newUpperPrice.toFixed(2)} | Escalón: $${adjustedGrid.stepSize.toFixed(2)}`);
 
-  // 6. Inicializar Guardián de Riesgo y Motor de Volatilidad en Vivo
+  // 6. Inicializar Guardián de Riesgo, Motor de Volatilidad y Matching Engine Local
   const riskGuard = new RiskGuard(env.MAX_ORDER_VALUE_USD, env.MAX_OPEN_ORDERS);
-  const volatilityEngine = new LiveVolatilityEngine(15); // Emite VOLATILITY_CHANGE si varía >= 15%
+  const volatilityEngine = new LiveVolatilityEngine(15);
+  const matchingEngine = new LocalMatchingEngine(repository, systemBus);
+
+  // Listener para realizar el "Flip" cuando el Matching Engine notifique que una orden virtual se ejecutó
+  systemBus.on('ORDER_FILLED', async (event) => {
+    console.log(`[Flip Event Bus] ⚡ ORDER_FILLED recibida para Nivel ${event.gridLevel}. Generando contra-orden ("Flip")...`);
+
+    const flipPlan = gridManager.handleOrderFill(event);
+    if (flipPlan) {
+      const createdFlip = await exchangeAdapter.createOrder({
+        symbol,
+        type: 'limit',
+        side: flipPlan.side,
+        amount: flipPlan.amount,
+        price: flipPlan.price,
+      });
+
+      await repository.createOrderRecord({
+        exchangeId: createdFlip.id,
+        symbol: createdFlip.symbol,
+        side: flipPlan.side === 'buy' ? OrderSide.BUY : OrderSide.SELL,
+        price: createdFlip.price,
+        amount: createdFlip.amount,
+        gridLevelId: flipPlan.levelIndex,
+        status: OrderStatus.OPEN,
+      });
+
+      console.log(`[Flip Executed] 🔄 Contra-orden ("Flip") ${flipPlan.side.toUpperCase()} colocada a $${flipPlan.price.toFixed(2)} USD (Nivel ${flipPlan.levelIndex})`);
+    }
+  });
 
   // 7. Ejecutar Reconciliador / Bootstrapper al reiniciar
   const bootstrapper = new Bootstrapper(exchangeAdapter, repository, gridManager);
@@ -134,7 +167,7 @@ async function main() {
       });
     }
 
-    console.log(`[Seeding] 🚀 Siembra inicial completada: ${seedPlans.length} órdenes límite guardadas con estado OPEN.`);
+    console.log(`[Seeding] 🚀 Siembra inicial completada: ${seedPlans.length} órdenes límite guardadas en PostgreSQL.`);
   }
 
   // 9. Reacción al Evento VOLATILITY_CHANGE: Cancelar órdenes virtuales y re-dibujar 15 escalones
@@ -150,7 +183,6 @@ async function main() {
       env.MAX_GRID_RANGE_USD.toNumber()
     );
 
-    // Cancelar órdenes virtuales abiertas
     const currentOpenOrders = await repository.getOpenOrders();
     for (const ord of currentOpenOrders) {
       if (ord.exchangeId) {
@@ -159,7 +191,6 @@ async function main() {
       }
     }
 
-    // Actualizar niveles en BD y re-sembrar
     for (const level of gridManager.getLevels()) {
       await repository.upsertGridLevel(level.levelIndex, level.price, false);
     }
@@ -188,17 +219,20 @@ async function main() {
     console.log(`[Rebalance Complete] ✨ Grilla Re-ajustada: Nuevo rango $${rebalanced.newLowerPrice.toFixed(2)} - $${rebalanced.newUpperPrice.toFixed(2)} USD (${newSeedPlans.length} órdenes re-sembradas).\n`);
   });
 
-  // Iniciar el motor de volatilidad en vivo
   await volatilityEngine.start(symbol, env.ATR_TIMEFRAME, env.ATR_PERIOD);
 
-  // 10. Bucle de Tickers de Mercado en Vivo (Binance Spot)
+  // 10. Bucle de Tickers de Mercado en Vivo -> Alimentar LocalMatchingEngine
   console.log('====================================================');
-  console.log('🟢 BOT OPERANDO EN TIEMPO REAL - SHADOW TRADING ACTIVE');
+  console.log('🟢 BOT OPERANDO EN TIEMPO REAL - MATCHING ENGINE EN VIVO');
   console.log('====================================================');
 
   const tickerInterval = setInterval(async () => {
     try {
       const ticker = await exchangeAdapter.fetchTicker(symbol);
+
+      // Alimentar el LocalMatchingEngine con el precio de mercado en vivo para emparejar órdenes virtuales en PostgreSQL
+      await matchingEngine.processLivePrice(ticker.last);
+
       const isOutOfBounds = ticker.last.lessThan(gridManager.getConfig().lowerPrice) || ticker.last.greaterThan(gridManager.getConfig().upperPrice);
       if (isOutOfBounds) {
         console.warn(`[Market Alert] ⚠️ Precio actual ($${ticker.last.toFixed(2)}) fuera del rango ($${gridManager.getConfig().lowerPrice.toFixed(2)} - $${gridManager.getConfig().upperPrice.toFixed(2)})`);
