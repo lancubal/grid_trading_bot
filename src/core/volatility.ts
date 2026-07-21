@@ -53,15 +53,40 @@ export class LiveVolatilityEngine extends EventEmitter {
   ): Promise<Decimal | null> {
     try {
       let rawCandles: any[] = [];
-      try {
-        rawCandles = await ccxtClient.fetchOHLCV(symbol, timeframe, undefined, period + 10);
-      } catch (err: any) {
-        // Si Binance Testnet/Global restringe la región de AWS, consultar endpoint público de Binance
-        if (err.message && (err.message.includes('451') || err.message.includes('restricted location') || err.message.includes('Unavailable For Legal Reasons'))) {
-          const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol.replace('/', '')}&interval=${timeframe}&limit=${period + 10}`);
-          rawCandles = await res.json();
-        } else {
-          throw err;
+      const cleanSymbol = symbol.replace('/', '');
+
+      // Intento 1: Usar cliente CCXT (o mock en pruebas unitarias)
+      if (ccxtClient && typeof ccxtClient.fetchOHLCV === 'function') {
+        try {
+          rawCandles = await ccxtClient.fetchOHLCV(symbol, timeframe, undefined, period + 10);
+        } catch (err: any) {
+          // Ignorar 451 y pasar a fallback REST
+        }
+      }
+
+      // Intento 2: API pública REST de Binance US (Acceso global garantizado sin bloqueo HTTP 451 en AWS US)
+      if (!rawCandles || rawCandles.length === 0) {
+        try {
+          const res = await fetch(`https://api.binance.us/api/v3/klines?symbol=${cleanSymbol}&interval=${timeframe}&limit=${period + 10}`);
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            rawCandles = data;
+          }
+        } catch (err) {
+          // Fallback a Intento 3
+        }
+      }
+
+      // Intento 3: API pública REST de Binance Global
+      if (!rawCandles || rawCandles.length === 0) {
+        try {
+          const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${timeframe}&limit=${period + 10}`);
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            rawCandles = data;
+          }
+        } catch (err) {
+          // Ignores
         }
       }
 

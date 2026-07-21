@@ -86,8 +86,11 @@ export class CcxtExchangeAdapter implements IExchangeAdapter {
       options: this.config.options || {},
     });
 
+    if (this.config.isDryRun) {
+      console.log(`[ExchangeAdapter Proxy] 🕵️ INTERCEPTOR ACTIVADO (DRY_RUN=true): Escrituras desviadas a simulador local UUID v4.`);
+    }
+
     if (this.config.isTestnet) {
-      // Intentar modo sandbox si está disponible
       try {
         this.exchange.setSandboxMode(true);
         console.log(`[ExchangeAdapter] ${this.config.exchangeId.toUpperCase()} configurado en modo TESTNET (Sandbox).`);
@@ -96,45 +99,62 @@ export class CcxtExchangeAdapter implements IExchangeAdapter {
       }
     }
 
-    if (this.config.isDryRun) {
-      console.log(`[ExchangeAdapter Proxy] 🕵️ INTERCEPTOR ACTIVADO (DRY_RUN=true): Escrituras desviadas a simulador local UUID v4.`);
-    }
-
     try {
       await this.exchange.loadMarkets();
       console.log(`[ExchangeAdapter] Mercados cargados exitosamente para ${this.config.exchangeId.toUpperCase()}`);
     } catch (err) {
-      console.warn(`[ExchangeAdapter Geo Alert] Advertencia al cargar mercados (Restricción de región AWS IP / Sandbox). Continuando en modo público:`, err);
+      console.warn(`[ExchangeAdapter Geo Alert] Lectura directa de mercados CCXT bloqueada en AWS US IP. Usando fallback de precio público (Binance US / Kraken):`, err);
     }
   }
 
   /**
-   * Lectura de ticker con resiliencia ante bloqueos de IP geográficos
+   * Lectura de ticker con resiliencia multi-fuente ante bloqueos de IP geográficos en AWS
    */
   public async fetchTicker(symbol: string): Promise<TickerData> {
     let lastPrice = this.lastKnownPrice;
+    let success = false;
 
+    // Intento 1: CCXT Exchange
     try {
       const ticker = await this.exchange.fetchTicker(symbol);
       if (ticker && ticker.last) {
         lastPrice = new Decimal(ticker.last);
         this.lastKnownPrice = lastPrice;
+        success = true;
       }
     } catch (err: any) {
-      // Si Binance Testnet o Global bloquea por región AWS (HTTP 451 / Restricted Location), consultar endpoint público de Binance.com
-      if (err.message && (err.message.includes('451') || err.message.includes('restricted location') || err.message.includes('Unavailable For Legal Reasons'))) {
-        try {
-          const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol.replace('/', '')}`);
-          const json = await res.json();
-          if (json && json.price) {
-            lastPrice = new Decimal(json.price);
-            this.lastKnownPrice = lastPrice;
-          }
-        } catch (fetchErr) {
-          console.warn('[ExchangeAdapter Ticker Fallback Error]', fetchErr);
+      // Ignorar 451 y pasar a fallback
+    }
+
+    // Intento 2: API Pública Binance US (Acceso permitido en todo AWS US)
+    if (!success) {
+      try {
+        const cleanSymbol = symbol.replace('/', '');
+        const res = await fetch(`https://api.binance.us/api/v3/ticker/price?symbol=${cleanSymbol}`);
+        const json = await res.json();
+        if (json && json.price) {
+          lastPrice = new Decimal(json.price);
+          this.lastKnownPrice = lastPrice;
+          success = true;
         }
-      } else {
-        console.warn('[ExchangeAdapter Ticker Warning]', err);
+      } catch (err) {
+        // Pasar a intento 3
+      }
+    }
+
+    // Intento 3: API Pública Binance Global
+    if (!success) {
+      try {
+        const cleanSymbol = symbol.replace('/', '');
+        const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${cleanSymbol}`);
+        const json = await res.json();
+        if (json && json.price) {
+          lastPrice = new Decimal(json.price);
+          this.lastKnownPrice = lastPrice;
+          success = true;
+        }
+      } catch (err) {
+        // Fallback a lastKnownPrice
       }
     }
 

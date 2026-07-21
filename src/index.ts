@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import { EventEmitter } from 'events';
-import ccxt from 'ccxt';
 import Decimal from 'decimal.js';
 import { OrderSide, OrderStatus } from '@prisma/client';
 import { loadEnvConfig, getGridConfigFromEnv } from './config';
@@ -44,12 +43,26 @@ async function main() {
 
   // 3. Descargar velas recientes para calcular ATR inicial y adaptar ancho de grilla
   const symbol = env.GRID_SYMBOL;
-  const ccxtPublic = new ccxt.binance({ enableRateLimit: true });
+  const cleanSymbol = symbol.replace('/', '');
   console.log(`[ATR Calculation] Descargando velas de ${env.ATR_TIMEFRAME} para calcular volatilidad de ${symbol}...`);
 
   let initialAtr = new Decimal(500);
   try {
-    const rawCandles = await ccxtPublic.fetchOHLCV(symbol, env.ATR_TIMEFRAME, undefined, 30);
+    let rawCandles: any[] = [];
+    try {
+      const res = await fetch(`https://api.binance.us/api/v3/klines?symbol=${cleanSymbol}&interval=${env.ATR_TIMEFRAME}&limit=30`);
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) rawCandles = data;
+    } catch (err) {
+      // Fallback
+    }
+
+    if (rawCandles.length === 0) {
+      const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=${env.ATR_TIMEFRAME}&limit=30`);
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) rawCandles = data;
+    }
+
     if (rawCandles && rawCandles.length > 0) {
       const parsedCandles: OHLCV[] = rawCandles.map((c) => ({
         timestamp: typeof c[0] === 'number' ? c[0] : Date.now(),
