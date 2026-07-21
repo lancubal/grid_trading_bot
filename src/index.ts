@@ -9,6 +9,7 @@ import { GridManager } from './core/gridManager';
 import { RiskGuard } from './core/riskGuard';
 import { Bootstrapper } from './core/bootstrapper';
 import { AtrCalculator } from './core/atrCalculator';
+import { LiveVolatilityEngine } from './core/volatility';
 import { OHLCV } from './backtest/backtester';
 
 async function main() {
@@ -78,18 +79,17 @@ async function main() {
 
   console.log(`[Grid Bounds] Piso: $${adjustedGrid.newLowerPrice.toFixed(2)} | Techo: $${adjustedGrid.newUpperPrice.toFixed(2)} | Escalón: $${adjustedGrid.stepSize.toFixed(2)}`);
 
-  // 6. Inicializar Guardián de Riesgo
+  // 6. Inicializar Guardián de Riesgo y Motor de Volatilidad en Vivo
   const riskGuard = new RiskGuard(env.MAX_ORDER_VALUE_USD, env.MAX_OPEN_ORDERS);
+  const volatilityEngine = new LiveVolatilityEngine(15); // Emite VOLATILITY_CHANGE si varía >= 15%
 
   // 7. Ejecutar Reconciliador / Bootstrapper al reiniciar
   const bootstrapper = new Bootstrapper(exchangeAdapter, repository, gridManager);
   await bootstrapper.reconcile(symbol);
 
   // 8. Siembra Inicial de Órdenes si es una Grilla Nueva
-  const levelsInDb = await repository.getAllGridLevels();
   const openOrdersInDb = await repository.getOpenOrders();
 
-  // Guardar niveles de grilla en BD
   for (const level of gridManager.getLevels()) {
     await repository.upsertGridLevel(level.levelIndex, level.price, false);
   }
@@ -115,7 +115,6 @@ async function main() {
         continue;
       }
 
-      // Interceptado en Dry-Run -> Genera UUID v4 local y no hace HTTP POST a Binance
       const createdOrder = await exchangeAdapter.createOrder({
         symbol,
         type: 'limit',
@@ -124,7 +123,6 @@ async function main() {
         price: plan.price,
       });
 
-      // Crear registro en PostgreSQL a través de Prisma con estado OPEN
       await repository.createOrderRecord({
         exchangeId: createdOrder.id,
         symbol: createdOrder.symbol,
@@ -139,14 +137,67 @@ async function main() {
     console.log(`[Seeding] 🚀 Siembra inicial completada: ${seedPlans.length} órdenes límite guardadas con estado OPEN.`);
   }
 
-  // 9. Bucle de Tickers de Mercado en Vivo (Binance Spot)
+  // 9. Reacción al Evento VOLATILITY_CHANGE: Cancelar órdenes virtuales y re-dibujar 15 escalones
+  volatilityEngine.on('VOLATILITY_CHANGE', async (newAtr: Decimal) => {
+    console.log(`\n[Rebalance Trigger] ⚡ Evento VOLATILITY_CHANGE Recibido (Nuevo ATR: $${newAtr.toFixed(2)} USD). Re-ajustando grilla...`);
+
+    const latestTicker = await exchangeAdapter.fetchTicker(symbol);
+    const rebalanced = gridManager.adjustToVolatility(
+      newAtr,
+      latestTicker.last,
+      4.0,
+      env.MIN_GRID_RANGE_USD.toNumber(),
+      env.MAX_GRID_RANGE_USD.toNumber()
+    );
+
+    // Cancelar órdenes virtuales abiertas
+    const currentOpenOrders = await repository.getOpenOrders();
+    for (const ord of currentOpenOrders) {
+      if (ord.exchangeId) {
+        await exchangeAdapter.cancelOrder(ord.exchangeId, symbol);
+        await repository.updateOrderStatusById(ord.id, OrderStatus.CANCELED);
+      }
+    }
+
+    // Actualizar niveles en BD y re-sembrar
+    for (const level of gridManager.getLevels()) {
+      await repository.upsertGridLevel(level.levelIndex, level.price, false);
+    }
+
+    const newSeedPlans = gridManager.generateSeedOrders(latestTicker.last);
+    for (const plan of newSeedPlans) {
+      const createdOrder = await exchangeAdapter.createOrder({
+        symbol,
+        type: 'limit',
+        side: plan.side,
+        amount: plan.amount,
+        price: plan.price,
+      });
+
+      await repository.createOrderRecord({
+        exchangeId: createdOrder.id,
+        symbol: createdOrder.symbol,
+        side: plan.side === 'buy' ? OrderSide.BUY : OrderSide.SELL,
+        price: createdOrder.price,
+        amount: createdOrder.amount,
+        gridLevelId: plan.levelIndex,
+        status: OrderStatus.OPEN,
+      });
+    }
+
+    console.log(`[Rebalance Complete] ✨ Grilla Re-ajustada: Nuevo rango $${rebalanced.newLowerPrice.toFixed(2)} - $${rebalanced.newUpperPrice.toFixed(2)} USD (${newSeedPlans.length} órdenes re-sembradas).\n`);
+  });
+
+  // Iniciar el motor de volatilidad en vivo
+  await volatilityEngine.start(symbol, env.ATR_TIMEFRAME, env.ATR_PERIOD);
+
+  // 10. Bucle de Tickers de Mercado en Vivo (Binance Spot)
   console.log('====================================================');
   console.log('🟢 BOT OPERANDO EN TIEMPO REAL - SHADOW TRADING ACTIVE');
   console.log('====================================================');
 
   const tickerInterval = setInterval(async () => {
     try {
-      // Lectura 100% real conectada a la API pública de Binance
       const ticker = await exchangeAdapter.fetchTicker(symbol);
       const isOutOfBounds = ticker.last.lessThan(gridManager.getConfig().lowerPrice) || ticker.last.greaterThan(gridManager.getConfig().upperPrice);
       if (isOutOfBounds) {
@@ -161,6 +212,7 @@ async function main() {
   const shutdown = async (signal: string) => {
     console.log(`\n[Shutdown] Recibida señal ${signal}. Cerrando bot de forma graciosa...`);
     clearInterval(tickerInterval);
+    volatilityEngine.stop();
     await repository.disconnect();
     process.exit(0);
   };
