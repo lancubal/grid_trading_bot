@@ -10,6 +10,12 @@ export interface OHLCV {
   volume: Decimal;
 }
 
+export interface BacktestOptions {
+  makerFeePercent?: Decimal | number;
+  enableTrailingUp?: boolean;
+  trailingUpThreshold?: number; // Cantidad de velas consecutivas por encima del techo para re-centrar
+}
+
 export interface BacktestResult {
   totalCandles: number;
   startDate: Date;
@@ -20,6 +26,7 @@ export interface BacktestResult {
   totalFlipsCompleted: number;
   totalBuyOrdersFilled: number;
   totalSellOrdersFilled: number;
+  trailingUpEventsCount: number;
 
   // Métricas Financieras
   initialInvestmentUsd: Decimal;
@@ -45,10 +52,21 @@ interface SimulatedGridLevel {
 export class GridBacktester {
   private config: GridConfigInput;
   private makerFeeRate: Decimal;
+  private enableTrailingUp: boolean;
+  private trailingUpThreshold: number;
 
-  constructor(config: GridConfigInput, makerFeePercent: Decimal | number = new Decimal('0.05')) {
-    this.config = config;
-    this.makerFeeRate = new Decimal(makerFeePercent).dividedBy(100); // 0.05% -> 0.0005
+  constructor(config: GridConfigInput, options: BacktestOptions | Decimal | number = {}) {
+    this.config = { ...config };
+
+    if (options instanceof Decimal || typeof options === 'number') {
+      this.makerFeeRate = new Decimal(options).dividedBy(100);
+      this.enableTrailingUp = false;
+      this.trailingUpThreshold = 4;
+    } else {
+      this.makerFeeRate = new Decimal(options.makerFeePercent ?? 0.05).dividedBy(100);
+      this.enableTrailingUp = options.enableTrailingUp ?? false;
+      this.trailingUpThreshold = options.trailingUpThreshold ?? 4;
+    }
   }
 
   /**
@@ -59,39 +77,52 @@ export class GridBacktester {
       throw new Error('[Backtester Error] No se provieron velas históricas para la simulación.');
     }
 
-    const stepSize = this.config.upperPrice.minus(this.config.lowerPrice).dividedBy(this.config.gridLevels - 1);
-    const budgetPerLevel = this.config.investment.dividedBy(this.config.gridLevels - 1);
+    let currentLower = new Decimal(this.config.lowerPrice);
+    let currentUpper = new Decimal(this.config.upperPrice);
+    let stepSize = currentUpper.minus(currentLower).dividedBy(this.config.gridLevels - 1);
+    let budgetPerLevel = this.config.investment.dividedBy(this.config.gridLevels - 1);
 
-    // Inicializar niveles simulados con precio inicial de la primera vela
     const startPrice = candles[0].close;
-    const levels: SimulatedGridLevel[] = [];
-
-    for (let i = 0; i < this.config.gridLevels; i++) {
-      const price = this.config.lowerPrice.plus(stepSize.times(i));
-      const amount = budgetPerLevel.dividedBy(price).toDecimalPlaces(6, Decimal.ROUND_DOWN);
-
-      levels.push({
-        levelIndex: i,
-        price,
-        hasBuyOrder: price.lessThan(startPrice),
-        hasSellOrder: price.greaterThan(startPrice),
-        orderAmount: amount,
-      });
-    }
+    let levels: SimulatedGridLevel[] = this.buildLevels(currentLower, stepSize, budgetPerLevel, startPrice);
 
     let totalFlipsCompleted = 0;
     let totalBuyOrdersFilled = 0;
     let totalSellOrdersFilled = 0;
+    let trailingUpEventsCount = 0;
     let totalGrossProfitUsd = new Decimal(0);
     let totalFeesPaidUsd = new Decimal(0);
     let outOfBoundsCandlesCount = 0;
+    let consecutiveUpperBreaches = 0;
 
     // Simular vela por vela
     for (const candle of candles) {
-      const { high, low } = candle;
+      const { high, low, close } = candle;
+
+      // Check Trailing Up Rerangos (Re-centrado hacia arriba)
+      if (this.enableTrailingUp) {
+        if (close.greaterThan(currentUpper)) {
+          consecutiveUpperBreaches++;
+          if (consecutiveUpperBreaches >= this.trailingUpThreshold) {
+            // Re-centrar grilla alrededor del precio de cierre actual
+            const totalRange = currentUpper.minus(currentLower);
+            const halfRange = totalRange.dividedBy(2);
+            currentLower = close.minus(halfRange);
+            currentUpper = close.plus(halfRange);
+
+            stepSize = currentUpper.minus(currentLower).dividedBy(this.config.gridLevels - 1);
+            budgetPerLevel = this.config.investment.dividedBy(this.config.gridLevels - 1);
+
+            levels = this.buildLevels(currentLower, stepSize, budgetPerLevel, close);
+            trailingUpEventsCount++;
+            consecutiveUpperBreaches = 0;
+          }
+        } else {
+          consecutiveUpperBreaches = 0;
+        }
+      }
 
       // Evaluar Out of Bounds
-      if (high.lessThan(this.config.lowerPrice) || low.greaterThan(this.config.upperPrice)) {
+      if (high.lessThan(currentLower) || low.greaterThan(currentUpper)) {
         outOfBoundsCandlesCount++;
       }
 
@@ -102,12 +133,10 @@ export class GridBacktester {
           totalBuyOrdersFilled++;
           level.hasBuyOrder = false;
 
-          // Fee de compra
           const buyValueUsd = level.price.times(level.orderAmount);
           const buyFeeUsd = buyValueUsd.times(this.makerFeeRate);
           totalFeesPaidUsd = totalFeesPaidUsd.plus(buyFeeUsd);
 
-          // Colocar contra-orden (VENTA) en nivel N+1
           const nextLevelIndex = level.levelIndex + 1;
           if (nextLevelIndex < levels.length) {
             levels[nextLevelIndex].hasSellOrder = true;
@@ -119,12 +148,10 @@ export class GridBacktester {
           totalSellOrdersFilled++;
           level.hasSellOrder = false;
 
-          // Fee de venta y ganancia bruta
           const sellValueUsd = level.price.times(level.orderAmount);
           const sellFeeUsd = sellValueUsd.times(this.makerFeeRate);
           totalFeesPaidUsd = totalFeesPaidUsd.plus(sellFeeUsd);
 
-          // Si vino de una compra en el nivel inferior, se completa un FLIP
           const prevLevelIndex = level.levelIndex - 1;
           if (prevLevelIndex >= 0) {
             const prevPrice = levels[prevLevelIndex].price;
@@ -134,7 +161,6 @@ export class GridBacktester {
             totalGrossProfitUsd = totalGrossProfitUsd.plus(cycleGrossProfit);
             totalFlipsCompleted++;
 
-            // Reactivar orden de COMPRA en el nivel inferior N-1
             levels[prevLevelIndex].hasBuyOrder = true;
           }
         }
@@ -161,6 +187,7 @@ export class GridBacktester {
       totalFlipsCompleted,
       totalBuyOrdersFilled,
       totalSellOrdersFilled,
+      trailingUpEventsCount,
       initialInvestmentUsd: this.config.investment,
       totalGrossProfitUsd,
       totalFeesPaidUsd,
@@ -170,5 +197,27 @@ export class GridBacktester {
       outOfBoundsHours: parseFloat(outOfBoundsHours.toFixed(2)),
       outOfBoundsPercent,
     };
+  }
+
+  private buildLevels(
+    lowerPrice: Decimal,
+    stepSize: Decimal,
+    budgetPerLevel: Decimal,
+    currentPrice: Decimal
+  ): SimulatedGridLevel[] {
+    const levels: SimulatedGridLevel[] = [];
+    for (let i = 0; i < this.config.gridLevels; i++) {
+      const price = lowerPrice.plus(stepSize.times(i));
+      const amount = budgetPerLevel.dividedBy(price).toDecimalPlaces(6, Decimal.ROUND_DOWN);
+
+      levels.push({
+        levelIndex: i,
+        price,
+        hasBuyOrder: price.lessThan(currentPrice),
+        hasSellOrder: price.greaterThan(currentPrice),
+        orderAmount: amount,
+      });
+    }
+    return levels;
   }
 }
