@@ -1,207 +1,208 @@
 import 'dotenv/config';
+import ccxt from 'ccxt';
 import Decimal from 'decimal.js';
+import { OrderSide, OrderStatus } from '@prisma/client';
 import { loadEnvConfig, getGridConfigFromEnv } from './config';
-import { CcxtExchangeAdapter } from './exchange/adapter';
-import { CcxtExchangeStreams, MockExchangeStreams, IExchangeStreams } from './exchange/streams';
+import { StateRepository } from './db/repository';
+import { CcxtExchangeAdapter, IExchangeAdapter } from './exchange/adapter';
+import { ShadowExchangeAdapter } from './exchange/shadowAdapter';
 import { GridManager } from './core/gridManager';
 import { RiskGuard } from './core/riskGuard';
-import { StateRepository } from './db/repository';
 import { Bootstrapper } from './core/bootstrapper';
+import { AtrCalculator } from './core/atrCalculator';
+import { OHLCV } from './backtest/backtester';
 
-async function bootstrap() {
+async function main() {
   console.log('====================================================');
-  console.log('🚀 Iniciando Bot de Grid Trading (Bitcoin / BTC)');
+  console.log('🤖 INICIANDO BOT DE GRID TRADING CON VOLATILIDAD ATR');
   console.log('====================================================');
 
-  // 1. Cargar y validar configuración de entorno
   const env = loadEnvConfig();
-  console.log(`[Bootstrapping] Exchange: ${env.EXCHANGE_ID.toUpperCase()} | Testnet: ${env.EXCHANGE_TESTNET}`);
+  const rawGridConfig = getGridConfigFromEnv(env);
 
-  // 2. Extraer configuración dinámica de la grilla desde el entorno
-  const gridConfig = getGridConfigFromEnv(env);
-  console.log(
-    `[Config Grilla Dinámica] Par: ${gridConfig.symbol} | Rango: $${gridConfig.lowerPrice.toFixed(2)} - $${gridConfig.upperPrice.toFixed(2)} | Niveles: ${gridConfig.gridLevels} | Inversión: $${gridConfig.investment.toFixed(2)}`
-  );
+  console.log(`[Config] Entorno: ${env.NODE_ENV} | Modo DRY_RUN (Shadow Trading): ${env.DRY_RUN}`);
+  console.log(`[Config ATR] Período: ${env.ATR_PERIOD} | Timeframe: ${env.ATR_TIMEFRAME} | Rango: $${env.MIN_GRID_RANGE_USD} - $${env.MAX_GRID_RANGE_USD} USD`);
 
-  // 3. Inicializar componentes del sistema
-  const exchangeAdapter = new CcxtExchangeAdapter({
+  // 1. Inicializar Repositorio de Estado DB
+  const repository = new StateRepository();
+
+  // 2. Seleccionar Adaptador de Exchange (Shadow Trading vs Real Exchange)
+  const exchangeConfig = {
     exchangeId: env.EXCHANGE_ID,
     apiKey: env.EXCHANGE_API_KEY,
-    secret: env.EXCHANGE_SECRET,
+    secret: env.EXCHANGE_API_SECRET,
     isTestnet: env.EXCHANGE_TESTNET,
-  });
-
-  const exchangeStreams: IExchangeStreams = env.EXCHANGE_API_KEY
-    ? new CcxtExchangeStreams({
-        exchangeId: env.EXCHANGE_ID,
-        apiKey: env.EXCHANGE_API_KEY,
-        secret: env.EXCHANGE_SECRET,
-        isTestnet: env.EXCHANGE_TESTNET,
-      })
-    : new MockExchangeStreams();
-
-  const gridManager = new GridManager(gridConfig);
-  const riskGuard = new RiskGuard(new Decimal(env.MAX_ORDER_VALUE_USD), env.MAX_OPEN_ORDERS);
-  const stateRepository = new StateRepository();
-  const bootstrapper = new Bootstrapper(exchangeAdapter, stateRepository, gridManager);
-
-  // 4. Configuración del Graceful Shutdown (Cierre Limpio del Sistema)
-  let isShuttingDown = false;
-  const gracefulShutdown = async (signal: string) => {
-    if (isShuttingDown) return;
-    isShuttingDown = true;
-
-    console.log(`\n[Graceful Shutdown] 🛑 Señal ${signal} recibida. Iniciando cierre ordenado del bot...`);
-
-    try {
-      console.log('[Graceful Shutdown] 🔌 Cerrando conexiones de WebSockets...');
-      await exchangeStreams.close();
-
-      console.log('[Graceful Shutdown] 🗄️ Desconectando cliente de PostgreSQL / Prisma...');
-      await stateRepository.disconnect();
-
-      console.log('====================================================');
-      console.log('✅ Bot finalizado limpiamente. ¡Hasta luego!');
-      console.log('====================================================');
-      process.exit(0);
-    } catch (err) {
-      console.error('[Graceful Shutdown Error] Error durante la desconexión:', err);
-      process.exit(1);
-    }
   };
 
-  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-
-  // 5. Conectar adaptador de Exchange y validar precio de mercado
-  let currentMarketPrice = new Decimal('64500.00'); // Precio fallback centrado en $64,500
-  try {
-    await exchangeAdapter.initialize();
-    const ticker = await exchangeAdapter.fetchTicker(gridConfig.symbol);
-    currentMarketPrice = ticker.last;
-    console.log(`[Market Data] Precio actual en tiempo real ${gridConfig.symbol}: $${currentMarketPrice.toFixed(2)} USDT`);
-  } catch (error) {
-    console.warn('[Market Data] No se pudo conectar con la API en vivo. Utilizando precio simulado:', currentMarketPrice.toString());
-  }
-
-  // Verificación de Rango "Out of Bounds"
-  if (currentMarketPrice.lessThan(gridConfig.lowerPrice) || currentMarketPrice.greaterThan(gridConfig.upperPrice)) {
-    console.warn(
-      `[Grid Warning] ⚠️ El precio actual ($${currentMarketPrice.toFixed(2)}) está FUERA del rango de la grilla ($${gridConfig.lowerPrice.toFixed(2)} - $${gridConfig.upperPrice.toFixed(2)}).`
-    );
+  let exchangeAdapter: IExchangeAdapter;
+  if (env.DRY_RUN) {
+    exchangeAdapter = new ShadowExchangeAdapter(exchangeConfig);
   } else {
-    console.log(`[Grid Bounds] ✅ El precio actual ($${currentMarketPrice.toFixed(2)}) está correctamente centrado dentro del rango de la grilla.`);
+    exchangeAdapter = new CcxtExchangeAdapter(exchangeConfig);
+  }
+  await exchangeAdapter.initialize();
+
+  // 3. Descargar velas recientes para calcular ATR inicial y adaptar ancho de grilla
+  const symbol = env.GRID_SYMBOL;
+  const ccxtPublic = new ccxt.binance({ enableRateLimit: true });
+  console.log(`[ATR Calculation] Descargando velas de ${env.ATR_TIMEFRAME} para calcular volatilidad de ${symbol}...`);
+
+  let initialAtr = new Decimal(500);
+  try {
+    const rawCandles = await ccxtPublic.fetchOHLCV(symbol, env.ATR_TIMEFRAME, undefined, 30);
+    if (rawCandles && rawCandles.length > 0) {
+      const parsedCandles: OHLCV[] = rawCandles.map((c) => ({
+        timestamp: typeof c[0] === 'number' ? c[0] : Date.now(),
+        open: new Decimal(c[1] ?? 0),
+        high: new Decimal(c[2] ?? 0),
+        low: new Decimal(c[3] ?? 0),
+        close: new Decimal(c[4] ?? 0),
+        volume: new Decimal(c[5] ?? 0),
+      }));
+      initialAtr = AtrCalculator.calculate(parsedCandles, env.ATR_PERIOD);
+      console.log(`[ATR Calculation] ATR Calculado (${env.ATR_TIMEFRAME}): $${initialAtr.toFixed(2)} USD`);
+    }
+  } catch (err) {
+    console.warn('[ATR Warning] No se pudieron descargar velas live para ATR. Usando fallback $500 USD:', err);
   }
 
-  // 6. Reconciliación de Estado & Bootstrapping de Resiliencia
-  console.log('[Bootstrapping] Ejecutando reconciliación de estado...');
-  const reconcileResult = await bootstrapper.reconcile(gridConfig.symbol);
+  // 4. Obtener Precio de Mercado Actual
+  const initialTicker = await exchangeAdapter.fetchTicker(symbol);
+  const currentPrice = initialTicker.last;
+  console.log(`[Market Data] Precio actual de mercado para ${symbol}: $${currentPrice.toFixed(2)} USD`);
 
-  if (reconcileResult.isFreshGrid) {
-    console.log('[Grid Seeding] Grilla nueva detectada. Guardando niveles y realizando siembra inicial...');
-    
-    // Guardar niveles estáticos en PostgreSQL
-    for (const level of gridManager.getLevels()) {
-      try {
-        await stateRepository.upsertGridLevel(level.levelIndex, level.price, false);
-      } catch (err) {
-        console.warn(`[DB Sync] Advertencia al sincronizar nivel ${level.levelIndex} en BD:`, err);
-      }
-    }
+  // 5. Inicializar GridManager y ajustar rango dinámico por ATR
+  const gridManager = new GridManager(rawGridConfig);
+  const adjustedGrid = gridManager.adjustToVolatility(
+    initialAtr,
+    currentPrice,
+    4.0,
+    env.MIN_GRID_RANGE_USD.toNumber(),
+    env.MAX_GRID_RANGE_USD.toNumber()
+  );
 
-    // Sembrar órdenes iniciales
-    const seedOrders = gridManager.generateSeedOrders(currentMarketPrice);
-    let placedCount = 0;
+  console.log(`[Grid Bounds] Piso: $${adjustedGrid.newLowerPrice.toFixed(2)} | Techo: $${adjustedGrid.newUpperPrice.toFixed(2)} | Escalón: $${adjustedGrid.stepSize.toFixed(2)}`);
 
-    for (const seedPlan of seedOrders) {
+  // 6. Inicializar Guardián de Riesgo
+  const riskGuard = new RiskGuard(env.MAX_ORDER_VALUE_USD, env.MAX_OPEN_ORDERS);
+
+  // 7. Ejecutar Reconciliador / Bootstrapper al reiniciar
+  const bootstrapper = new Bootstrapper(exchangeAdapter, repository, gridManager);
+  await bootstrapper.reconcile(symbol);
+
+  // 8. Siembra Inicial de Órdenes si es una Grilla Nueva
+  const levelsInDb = await repository.getAllGridLevels();
+  const openOrdersInDb = await repository.getOpenOrders();
+
+  // Guardar niveles de grilla en BD
+  for (const level of gridManager.getLevels()) {
+    await repository.upsertGridLevel(level.levelIndex, level.price, false);
+  }
+
+  if (openOrdersInDb.length === 0) {
+    console.log('[Seeding] Generando órdenes de siembra iniciales...');
+    const seedPlans = gridManager.generateSeedOrders(currentPrice);
+
+    for (const plan of seedPlans) {
       const riskCheck = riskGuard.validateOrder(
         {
-          symbol: gridConfig.symbol,
+          symbol,
           type: 'limit',
-          side: seedPlan.side,
-          amount: seedPlan.amount,
-          price: seedPlan.price,
+          side: plan.side,
+          amount: plan.amount,
+          price: plan.price,
         },
-        placedCount
+        openOrdersInDb.length
       );
 
       if (!riskCheck.valid) {
-        console.error(`[Risk Guard Reject] Orden nivel ${seedPlan.levelIndex} rechazada: ${riskCheck.reason}`);
+        console.warn(`[Risk Guard Alert] Orden de siembra rechazada: ${riskCheck.reason}`);
         continue;
       }
 
-      console.log(`[Grid Seeding] Colocando orden de ${seedPlan.side.toUpperCase()} LIMIT en Nivel ${seedPlan.levelIndex} @ $${seedPlan.price.toFixed(2)} (${seedPlan.amount} BTC)`);
+      const createdOrder = await exchangeAdapter.createOrder({
+        symbol,
+        type: 'limit',
+        side: plan.side,
+        amount: plan.amount,
+        price: plan.price,
+      });
 
-      try {
-        await stateRepository.createOrderRecord({
-          symbol: gridConfig.symbol,
-          side: seedPlan.side === 'buy' ? 'BUY' : 'SELL',
-          price: seedPlan.price,
-          amount: seedPlan.amount,
-          gridLevelId: seedPlan.levelIndex,
-          status: 'PENDING',
-        });
-        placedCount++;
-      } catch (err) {
-        console.error(`[Grid Seeding Error] Error al persistir orden en Nivel ${seedPlan.levelIndex}:`, err);
-      }
+      await repository.createOrderRecord({
+        exchangeId: createdOrder.id,
+        symbol: createdOrder.symbol,
+        side: plan.side === 'buy' ? OrderSide.BUY : OrderSide.SELL,
+        price: createdOrder.price,
+        amount: createdOrder.amount,
+        gridLevelId: plan.levelIndex,
+        status: OrderStatus.OPEN,
+      });
     }
 
-    console.log(`[Grid Seeding] Se sembraron ${placedCount} órdenes iniciales exitosamente.`);
-  } else {
-    console.log(`[Bootstrapping Resumen] Estado recuperado: ${reconcileResult.restoredOpenOrdersCount} órdenes activas, ${reconcileResult.offlineFillsCount} fills offline procesados, ${reconcileResult.newFlipsCreatedCount} contra-órdenes creadas.`);
+    console.log(`[Seeding] 🚀 Siembra inicial completada: ${seedPlans.length} órdenes límite sembradas.`);
   }
 
-  // 7. Conectar Stream de WebSockets para Captura de Ejecuciones en Tiempo Real
-  await exchangeStreams.subscribeOrders(gridConfig.symbol);
+  // 9. Configurar Listener de Ejecución en Tiempo Real
+  if (exchangeAdapter instanceof ShadowExchangeAdapter) {
+    exchangeAdapter.on('order:filled', async (event) => {
+      console.log(`[Shadow Stream] ⚡ Order Filled Event recibida: ID ${event.id} en Nivel ${event.gridLevel}`);
+      await repository.updateOrderStatusByExchangeId(event.id, OrderStatus.FILLED);
 
-  // Escuchar ejecuciones entrantes desde el WebSocket -> Disparar contra-orden ("Flip")
-  exchangeStreams.on('order:filled', (event) => {
-    console.log(`[WebSocket Stream] ⚡ Orden ejecutada recibida en tiempo real (ID: ${event.id}) Side: ${event.side.toUpperCase()} @ $${event.price.toFixed(2)}`);
-    gridManager.handleOrderFill(event);
-  });
+      const flipPlan = gridManager.handleOrderFill(event);
+      if (flipPlan) {
+        const createdFlip = await exchangeAdapter.createOrder({
+          symbol,
+          type: 'limit',
+          side: flipPlan.side,
+          amount: flipPlan.amount,
+          price: flipPlan.price,
+        });
 
-  // 8. Orquestación del Event Bus para Contra-Órdenes ("Flips") en Tiempo Real
-  gridManager.on('grid:flip_required', async (flipPlan) => {
-    console.log(`[EventBus] 🔄 FLIP REQUERIDO: Nivel ${flipPlan.levelIndex} | Side: ${flipPlan.side.toUpperCase()} @ $${flipPlan.price.toFixed(2)}`);
+        await repository.createOrderRecord({
+          exchangeId: createdFlip.id,
+          symbol: createdFlip.symbol,
+          side: flipPlan.side === 'buy' ? OrderSide.BUY : OrderSide.SELL,
+          price: createdFlip.price,
+          amount: createdFlip.amount,
+          gridLevelId: flipPlan.levelIndex,
+          status: OrderStatus.OPEN,
+        });
 
-    const riskCheck = riskGuard.validateOrder(
-      {
-        symbol: gridConfig.symbol,
-        type: 'limit',
-        side: flipPlan.side,
-        amount: flipPlan.amount,
-        price: flipPlan.price,
-      },
-      0
-    );
+        console.log(`[Flip Executed] 🔄 Contra-orden ("Flip") ${flipPlan.side.toUpperCase()} colocada a $${flipPlan.price.toFixed(2)} USD`);
+      }
+    });
+  }
 
-    if (!riskCheck.valid) {
-      console.error(`[Risk Guard Reject] Contra-orden rechazada: ${riskCheck.reason}`);
-      return;
-    }
+  // 10. Bucle de Tickers de Mercado en Vivo (2 segundos)
+  console.log('====================================================');
+  console.log('🟢 BOT OPERANDO EN TIEMPO REAL - SHADOW TRADING ACTIVE');
+  console.log('====================================================');
 
+  const tickerInterval = setInterval(async () => {
     try {
-      await stateRepository.createOrderRecord({
-        symbol: gridConfig.symbol,
-        side: flipPlan.side === 'buy' ? 'BUY' : 'SELL',
-        price: flipPlan.price,
-        amount: flipPlan.amount,
-        gridLevelId: flipPlan.levelIndex,
-        status: 'PENDING',
-      });
-      console.log(`[EventBus] ✅ Contra-orden registrada en BD para Nivel ${flipPlan.levelIndex} @ $${flipPlan.price.toFixed(2)}`);
+      const ticker = await exchangeAdapter.fetchTicker(symbol);
+      const isOutOfBounds = ticker.last.lessThan(gridManager.getConfig().lowerPrice) || ticker.last.greaterThan(gridManager.getConfig().upperPrice);
+      if (isOutOfBounds) {
+        console.warn(`[Market Alert] ⚠️ Precio actual ($${ticker.last.toFixed(2)}) fuera del rango ($${gridManager.getConfig().lowerPrice.toFixed(2)} - $${gridManager.getConfig().upperPrice.toFixed(2)})`);
+      }
     } catch (err) {
-      console.error(`[EventBus Error] Error al colocar contra-orden:`, err);
+      console.error('[Ticker Loop Error]', err);
     }
-  });
+  }, 2000);
 
-  console.log('====================================================');
-  console.log('✅ Bot inicializado, reconciliado y escuchando WebSockets en tiempo real.');
-  console.log('====================================================');
+  // Manejo de Shutdown Gracioso
+  const shutdown = async (signal: string) => {
+    console.log(`\n[Shutdown] Recibida señal ${signal}. Cerrando bot de forma graciosa...`);
+    clearInterval(tickerInterval);
+    await repository.disconnect();
+    process.exit(0);
+  };
+
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
-bootstrap().catch((error) => {
-  console.error('[Fatal Error] Excepción no controlada durante la inicialización:', error);
+main().catch((err) => {
+  console.error('[Fatal Error] Error no controlado en la aplicación:', err);
   process.exit(1);
 });

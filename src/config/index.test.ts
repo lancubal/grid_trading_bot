@@ -1,42 +1,42 @@
 import { describe, it, expect } from 'vitest';
-import Decimal from 'decimal.js';
-import { getGridConfigFromEnv, GridConfigSchema } from './index';
+import { EnvSchema } from './index';
 
-describe('Config - Dynamic Grid & Env Validation Tests', () => {
-  it('debe parsear y validar la configuración de grilla desde variables de entorno', () => {
+describe('Config - Zod Schema Validation Tests', () => {
+  it('debe validar y transformar correctamente variables de entorno válidas incluyendo DRY_RUN y ATR', () => {
     const mockEnv = {
+      NODE_ENV: 'development',
+      PORT: '3000',
+      DRY_RUN: 'true',
+      GRID_SYMBOL: 'BTC/USDT',
+      GRID_LEVELS: '15',
+      GRID_INVESTMENT: '1000.00',
+      ATR_PERIOD: '14',
+      ATR_TIMEFRAME: '1h',
+      MIN_GRID_RANGE_USD: '1500.00',
+      MAX_GRID_RANGE_USD: '6000.00',
+      MAX_ORDER_VALUE_USD: '150.00',
+      MAX_OPEN_ORDERS: '20',
       DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/grid_bot?schema=public',
       EXCHANGE_ID: 'binance',
-      EXCHANGE_API_KEY: '',
-      EXCHANGE_SECRET: '',
-      EXCHANGE_TESTNET: true,
-      GRID_SYMBOL: 'BTC/USDT',
-      GRID_LOWER_PRICE: '55000.00',
-      GRID_UPPER_PRICE: '62000.00',
-      GRID_LEVELS: 8,
-      GRID_INVESTMENT: '2000.00',
-      MAX_ORDER_VALUE_USD: '10000.00',
-      MAX_OPEN_ORDERS: 50,
+      EXCHANGE_TESTNET: 'true',
     };
 
-    const gridConfig = getGridConfigFromEnv(mockEnv as any);
-
-    expect(gridConfig.symbol).toBe('BTC/USDT');
-    expect(gridConfig.lowerPrice.toString()).toBe('55000');
-    expect(gridConfig.upperPrice.toString()).toBe('62000');
-    expect(gridConfig.gridLevels).toBe(8);
-    expect(gridConfig.investment.toString()).toBe('2000');
+    const parsed = EnvSchema.parse(mockEnv);
+    expect(parsed.DRY_RUN).toBe(true);
+    expect(parsed.GRID_SYMBOL).toBe('BTC/USDT');
+    expect(parsed.GRID_LEVELS).toBe(15);
+    expect(parsed.GRID_INVESTMENT.toString()).toBe('1000');
+    expect(parsed.ATR_PERIOD).toBe(14);
+    expect(parsed.ATR_TIMEFRAME).toBe('1h');
+    expect(parsed.MIN_GRID_RANGE_USD.toString()).toBe('1500');
+    expect(parsed.MAX_GRID_RANGE_USD.toString()).toBe('6000');
   });
 
-  it('debe rechazar una grilla donde el precio superior sea menor o igual al inferior', () => {
-    const invalidConfig = {
-      symbol: 'BTC/USDT',
-      lowerPrice: new Decimal('65000.00'),
-      upperPrice: new Decimal('60000.00'), // Inválido: upper < lower
-      gridLevels: 5,
-      investment: new Decimal('1000.00'),
+  it('debe arrojar error de Zod si DATABASE_URL no es una URL válida', () => {
+    const invalidEnv = {
+      DATABASE_URL: 'not-a-valid-url',
     };
 
-    expect(() => GridConfigSchema.parse(invalidConfig)).toThrow();
+    expect(() => EnvSchema.parse(invalidEnv)).toThrow();
   });
 });
