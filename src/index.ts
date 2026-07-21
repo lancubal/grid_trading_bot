@@ -5,7 +5,6 @@ import { OrderSide, OrderStatus } from '@prisma/client';
 import { loadEnvConfig, getGridConfigFromEnv } from './config';
 import { StateRepository } from './db/repository';
 import { CcxtExchangeAdapter, IExchangeAdapter } from './exchange/adapter';
-import { ShadowExchangeAdapter } from './exchange/shadowAdapter';
 import { GridManager } from './core/gridManager';
 import { RiskGuard } from './core/riskGuard';
 import { Bootstrapper } from './core/bootstrapper';
@@ -26,20 +25,16 @@ async function main() {
   // 1. Inicializar Repositorio de Estado DB
   const repository = new StateRepository();
 
-  // 2. Seleccionar Adaptador de Exchange (Shadow Trading vs Real Exchange)
+  // 2. Configurar Adaptador Proxy de Exchange (Lectura Mercado Real + Interceptor Condicional de Órdenes)
   const exchangeConfig = {
     exchangeId: env.EXCHANGE_ID,
     apiKey: env.EXCHANGE_API_KEY,
     secret: env.EXCHANGE_API_SECRET,
     isTestnet: env.EXCHANGE_TESTNET,
+    isDryRun: env.DRY_RUN,
   };
 
-  let exchangeAdapter: IExchangeAdapter;
-  if (env.DRY_RUN) {
-    exchangeAdapter = new ShadowExchangeAdapter(exchangeConfig);
-  } else {
-    exchangeAdapter = new CcxtExchangeAdapter(exchangeConfig);
-  }
+  const exchangeAdapter: IExchangeAdapter = new CcxtExchangeAdapter(exchangeConfig);
   await exchangeAdapter.initialize();
 
   // 3. Descargar velas recientes para calcular ATR inicial y adaptar ancho de grilla
@@ -100,7 +95,7 @@ async function main() {
   }
 
   if (openOrdersInDb.length === 0) {
-    console.log('[Seeding] Generando órdenes de siembra iniciales...');
+    console.log('[Seeding] Generando órdenes de siembra iniciales con UUID v4...');
     const seedPlans = gridManager.generateSeedOrders(currentPrice);
 
     for (const plan of seedPlans) {
@@ -120,6 +115,7 @@ async function main() {
         continue;
       }
 
+      // Interceptado en Dry-Run -> Genera UUID v4 local y no hace HTTP POST a Binance
       const createdOrder = await exchangeAdapter.createOrder({
         symbol,
         type: 'limit',
@@ -128,6 +124,7 @@ async function main() {
         price: plan.price,
       });
 
+      // Crear registro en PostgreSQL a través de Prisma con estado OPEN
       await repository.createOrderRecord({
         exchangeId: createdOrder.id,
         symbol: createdOrder.symbol,
@@ -139,47 +136,17 @@ async function main() {
       });
     }
 
-    console.log(`[Seeding] 🚀 Siembra inicial completada: ${seedPlans.length} órdenes límite sembradas.`);
+    console.log(`[Seeding] 🚀 Siembra inicial completada: ${seedPlans.length} órdenes límite guardadas con estado OPEN.`);
   }
 
-  // 9. Configurar Listener de Ejecución en Tiempo Real
-  if (exchangeAdapter instanceof ShadowExchangeAdapter) {
-    exchangeAdapter.on('order:filled', async (event) => {
-      console.log(`[Shadow Stream] ⚡ Order Filled Event recibida: ID ${event.id} en Nivel ${event.gridLevel}`);
-      await repository.updateOrderStatusByExchangeId(event.id, OrderStatus.FILLED);
-
-      const flipPlan = gridManager.handleOrderFill(event);
-      if (flipPlan) {
-        const createdFlip = await exchangeAdapter.createOrder({
-          symbol,
-          type: 'limit',
-          side: flipPlan.side,
-          amount: flipPlan.amount,
-          price: flipPlan.price,
-        });
-
-        await repository.createOrderRecord({
-          exchangeId: createdFlip.id,
-          symbol: createdFlip.symbol,
-          side: flipPlan.side === 'buy' ? OrderSide.BUY : OrderSide.SELL,
-          price: createdFlip.price,
-          amount: createdFlip.amount,
-          gridLevelId: flipPlan.levelIndex,
-          status: OrderStatus.OPEN,
-        });
-
-        console.log(`[Flip Executed] 🔄 Contra-orden ("Flip") ${flipPlan.side.toUpperCase()} colocada a $${flipPlan.price.toFixed(2)} USD`);
-      }
-    });
-  }
-
-  // 10. Bucle de Tickers de Mercado en Vivo (2 segundos)
+  // 9. Bucle de Tickers de Mercado en Vivo (Binance Spot)
   console.log('====================================================');
   console.log('🟢 BOT OPERANDO EN TIEMPO REAL - SHADOW TRADING ACTIVE');
   console.log('====================================================');
 
   const tickerInterval = setInterval(async () => {
     try {
+      // Lectura 100% real conectada a la API pública de Binance
       const ticker = await exchangeAdapter.fetchTicker(symbol);
       const isOutOfBounds = ticker.last.lessThan(gridManager.getConfig().lowerPrice) || ticker.last.greaterThan(gridManager.getConfig().upperPrice);
       if (isOutOfBounds) {
