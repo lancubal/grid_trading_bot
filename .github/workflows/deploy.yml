@@ -49,14 +49,27 @@ jobs:
           username: ${{ secrets.AWS_USERNAME }}
           key: ${{ secrets.AWS_SSH_KEY }}
           script: |
-            cd /home/ubuntu/grid_trading_bot || git clone git@github.com:lancubal/grid_trading_bot.git /home/ubuntu/grid_trading_bot
-            cd /home/ubuntu/grid_trading_bot
+            mkdir -p ~/.ssh
+            ssh-keyscan -t rsa,ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null || true
+
+            # Clonar repositorio usando HTTPS (no requiere llaves SSH adicionales en EC2)
+            if [ ! -d "$HOME/grid_trading_bot/.git" ]; then
+              rm -rf $HOME/grid_trading_bot
+              git clone https://github.com/lancubal/grid_trading_bot.git $HOME/grid_trading_bot
+            fi
+
+            cd $HOME/grid_trading_bot
             git fetch --all
             git reset --hard origin/main
-            
-            # Escribir variables de entorno de producción
+
+            # Escribir variables de entorno de producción desde los secretos de GitHub
             echo "${{ secrets.ENV_FILE }}" > .env
-            
-            # Levantar contenedores Docker en segundo plano
-            docker-compose up -d --build
-            docker-compose ps
+
+            # Levantar contenedores Docker en segundo plano (Soporte para 'docker compose' y 'docker-compose')
+            if command -v docker-compose &> /dev/null; then
+              docker-compose up -d --build
+              docker-compose ps
+            else
+              docker compose up -d --build
+              docker compose ps
+            fi
