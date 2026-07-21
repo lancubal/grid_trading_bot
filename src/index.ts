@@ -125,6 +125,9 @@ async function main() {
         status: OrderStatus.OPEN,
       });
 
+      // Actualizar isHolding en el nivel correspondiente
+      await repository.upsertGridLevel(flipPlan.levelIndex, flipPlan.price, flipPlan.side === 'sell');
+
       console.log(`[Flip Executed] 🔄 Contra-orden ("Flip") ${flipPlan.side.toUpperCase()} colocada a $${flipPlan.price.toFixed(2)} USD (Nivel ${flipPlan.levelIndex})`);
     }
   });
@@ -135,10 +138,6 @@ async function main() {
 
   // 8. Siembra Inicial de Órdenes si es una Grilla Nueva
   const openOrdersInDb = await repository.getOpenOrders();
-
-  for (const level of gridManager.getLevels()) {
-    await repository.upsertGridLevel(level.levelIndex, level.price, false);
-  }
 
   if (openOrdersInDb.length === 0) {
     console.log('[Seeding] Generando órdenes de siembra iniciales con UUID v4...');
@@ -169,6 +168,8 @@ async function main() {
         price: plan.price,
       });
 
+      await repository.upsertGridLevel(plan.levelIndex, plan.price, plan.side === 'sell');
+
       await repository.createOrderRecord({
         exchangeId: createdOrder.id,
         symbol: createdOrder.symbol,
@@ -181,6 +182,10 @@ async function main() {
     }
 
     console.log(`[Seeding] 🚀 Siembra inicial completada: ${seedPlans.length} órdenes límite guardadas en PostgreSQL.`);
+  } else {
+    for (const level of gridManager.getLevels()) {
+      await repository.upsertGridLevel(level.levelIndex, level.price, false);
+    }
   }
 
   // 9. Reacción al Evento VOLATILITY_CHANGE: Cancelar órdenes virtuales y re-dibujar 15 escalones
@@ -204,10 +209,6 @@ async function main() {
       }
     }
 
-    for (const level of gridManager.getLevels()) {
-      await repository.upsertGridLevel(level.levelIndex, level.price, false);
-    }
-
     const newSeedPlans = gridManager.generateSeedOrders(latestTicker.last);
     for (const plan of newSeedPlans) {
       const createdOrder = await exchangeAdapter.createOrder({
@@ -217,6 +218,8 @@ async function main() {
         amount: plan.amount,
         price: plan.price,
       });
+
+      await repository.upsertGridLevel(plan.levelIndex, plan.price, plan.side === 'sell');
 
       await repository.createOrderRecord({
         exchangeId: createdOrder.id,

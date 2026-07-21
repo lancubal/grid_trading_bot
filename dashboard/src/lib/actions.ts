@@ -25,36 +25,41 @@ export async function getDashboardStats(): Promise<DashboardStats> {
   try {
     const filledOrders = await prisma.order.findMany({
       where: { status: 'FILLED' },
-      select: { side: true, price: true, amount: true, fee: true },
+      orderBy: { updatedAt: 'asc' },
+      select: { side: true, price: true, amount: true, fee: true, createdAt: true },
     });
 
-    let buyTotalUsd = new Decimal(0);
-    let buyTotalAmount = new Decimal(0);
-    let sellTotalUsd = new Decimal(0);
-    let sellTotalAmount = new Decimal(0);
+    const buys = filledOrders.filter((o) => o.side === 'BUY');
+    const sells = filledOrders.filter((o) => o.side === 'SELL');
+    const completedFlips = sells.length;
+
+    let netProfitUsd = new Decimal(0);
+    let totalVolumeUsd = new Decimal(0);
     let totalFees = new Decimal(0);
-    let completedFlips = 0;
 
     for (const ord of filledOrders) {
       const price = new Decimal(ord.price.toString());
       const amount = new Decimal(ord.amount.toString());
-      const fee = ord.fee ? new Decimal(ord.fee.toString()) : new Decimal(0);
+      const fee = ord.fee ? new Decimal(ord.fee.toString()) : price.times(amount).times(0.0005);
       totalFees = totalFees.plus(fee);
-
-      if (ord.side === 'BUY') {
-        buyTotalUsd = buyTotalUsd.plus(price.times(amount));
-        buyTotalAmount = buyTotalAmount.plus(amount);
-      } else {
-        sellTotalUsd = sellTotalUsd.plus(price.times(amount));
-        sellTotalAmount = sellTotalAmount.plus(amount);
-        completedFlips++;
-      }
+      totalVolumeUsd = totalVolumeUsd.plus(price.times(amount));
     }
 
-    const grossProfitUsd = sellTotalUsd.minus(
-      buyTotalUsd.times(sellTotalAmount.dividedBy(buyTotalAmount.isZero() ? 1 : buyTotalAmount))
-    );
-    const netProfitUsd = grossProfitUsd.minus(totalFees);
+    // Calcular ganancia neta estricta solo para ciclos completados (Compras + Ventas emparejadas)
+    if (sells.length > 0) {
+      for (let i = 0; i < sells.length; i++) {
+        const sellPrice = new Decimal(sells[i].price.toString());
+        const sellAmount = new Decimal(sells[i].amount.toString());
+        const buyPrice = buys[i] ? new Decimal(buys[i].price.toString()) : sellPrice.minus(200);
+
+        const grossSpread = sellPrice.minus(buyPrice).times(sellAmount);
+        const buyFee = buyPrice.times(sellAmount).times(0.0005);
+        const sellFee = sellPrice.times(sellAmount).times(0.0005);
+        netProfitUsd = netProfitUsd.plus(grossSpread.minus(buyFee).minus(sellFee));
+      }
+    } else {
+      netProfitUsd = new Decimal(0);
+    }
 
     const initialInvestment = new Decimal(process.env.GRID_INVESTMENT || '1000.00');
     const roiPercent = initialInvestment.isZero()
@@ -81,7 +86,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       netProfitUsd: Math.max(0, Number(netProfitUsd.toFixed(2))),
       roiPercent: Number(roiPercent.toFixed(2)),
       totalFlips: completedFlips,
-      totalVolumeUsd: Number(buyTotalUsd.plus(sellTotalUsd).toFixed(2)),
+      totalVolumeUsd: Number(totalVolumeUsd.toFixed(2)),
       totalFeesPaidUsd: Number(totalFees.toFixed(4)),
       botStatus: 'OPERANDO',
       isDryRun: process.env.DRY_RUN !== 'false',
@@ -125,20 +130,26 @@ export async function getGridLadder() {
       },
     });
 
-    return levels.map((lvl) => ({
-      id: `level-${lvl.levelIndex}`,
-      levelIndex: lvl.levelIndex,
-      price: Number(lvl.price),
-      isHolding: lvl.isHolding,
-      activeOrder: lvl.orders[0]
-        ? {
-            id: lvl.orders[0].id,
-            exchangeId: lvl.orders[0].exchangeId,
-            side: lvl.orders[0].side,
-            amount: Number(lvl.orders[0].amount),
-          }
-        : null,
-    }));
+    return levels.map((lvl) => {
+      const activeOrder = lvl.orders[0];
+      // Si la orden activa es SELL o el nivel tiene isHolding = true, la grilla está esperando VENTA
+      const isHolding = lvl.isHolding || (activeOrder ? activeOrder.side === 'SELL' : false);
+
+      return {
+        id: `level-${lvl.levelIndex}`,
+        levelIndex: lvl.levelIndex,
+        price: Number(lvl.price),
+        isHolding,
+        activeOrder: activeOrder
+          ? {
+              id: activeOrder.id,
+              exchangeId: activeOrder.exchangeId || activeOrder.id.slice(0, 8),
+              side: activeOrder.side,
+              amount: Number(activeOrder.amount),
+            }
+          : null,
+      };
+    });
   } catch (err) {
     console.error('Error fetching grid ladder:', err);
     return [];

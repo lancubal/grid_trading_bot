@@ -1,1 +1,30 @@
-{"node":{"8411227de8ea2e0824330973d8bb2d68b5b32ff7":{"workers":{"app/page":"8231"},"layer":{"app/page":"action-browser"}},"b1f3d02146f530ce99d23dddcad3fc2018767c95":{"workers":{"app/page":"8231"},"layer":{"app/page":"action-browser"}},"d81cc53e70182d66443ab13d41404e5a1daf3614":{"workers":{"app/page":"8231"},"layer":{"app/page":"action-browser"}}},"edge":{},"encryptionKey":"oaaQcb0ldGfMgmGa7HrsNce3zEYYi0Eqyd+7Xna07AI="}
+{
+  "node": {
+    "8411227de8ea2e0824330973d8bb2d68b5b32ff7": {
+      "workers": {
+        "app/page": "(action-browser)/./node_modules/next/dist/build/webpack/loaders/next-flight-action-entry-loader.js?actions=%5B%5B%22%2Fhome%2Fluna%2Frepos%2FdayTradingBot%2Fdashboard%2Fsrc%2Flib%2Factions.ts%22%2C%5B%22getRecentFlips%22%2C%22getGridLadder%22%2C%22getDashboardStats%22%5D%5D%5D&__client_imported__=true!"
+      },
+      "layer": {
+        "app/page": "action-browser"
+      }
+    },
+    "b1f3d02146f530ce99d23dddcad3fc2018767c95": {
+      "workers": {
+        "app/page": "(action-browser)/./node_modules/next/dist/build/webpack/loaders/next-flight-action-entry-loader.js?actions=%5B%5B%22%2Fhome%2Fluna%2Frepos%2FdayTradingBot%2Fdashboard%2Fsrc%2Flib%2Factions.ts%22%2C%5B%22getRecentFlips%22%2C%22getGridLadder%22%2C%22getDashboardStats%22%5D%5D%5D&__client_imported__=true!"
+      },
+      "layer": {
+        "app/page": "action-browser"
+      }
+    },
+    "d81cc53e70182d66443ab13d41404e5a1daf3614": {
+      "workers": {
+        "app/page": "(action-browser)/./node_modules/next/dist/build/webpack/loaders/next-flight-action-entry-loader.js?actions=%5B%5B%22%2Fhome%2Fluna%2Frepos%2FdayTradingBot%2Fdashboard%2Fsrc%2Flib%2Factions.ts%22%2C%5B%22getRecentFlips%22%2C%22getGridLadder%22%2C%22getDashboardStats%22%5D%5D%5D&__client_imported__=true!"
+      },
+      "layer": {
+        "app/page": "action-browser"
+      }
+    }
+  },
+  "edge": {},
+  "encryptionKey": "dbVGx5PtGpgt/WHFqq5hW5B3PGQ48DWcUhOLp6g3uOo="
+}
