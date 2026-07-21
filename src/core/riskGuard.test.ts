@@ -4,7 +4,7 @@ import { RiskGuard } from './riskGuard';
 
 describe('RiskGuard - Risk Management & Maker Enforcement Tests', () => {
   it('debe aprobar órdenes LIMIT con montos válidos dentro del límite', () => {
-    const riskGuard = new RiskGuard(new Decimal('150'), 20);
+    const riskGuard = new RiskGuard(new Decimal('150'), 20, new Decimal('2000'));
 
     const validOrder = {
       symbol: 'BTC/USDT',
@@ -14,7 +14,7 @@ describe('RiskGuard - Risk Management & Maker Enforcement Tests', () => {
       price: new Decimal('64000'), // Valor total = $64 USD
     };
 
-    const result = riskGuard.validateOrder(validOrder, 5);
+    const result = riskGuard.validateOrder(validOrder, 5, new Decimal('500'));
     expect(result.valid).toBe(true);
     expect(result.reason).toBeUndefined();
   });
@@ -50,7 +50,7 @@ describe('RiskGuard - Risk Management & Maker Enforcement Tests', () => {
     expect(result.reason).toContain('Las órdenes LIMIT requieren especificar un precio válido');
   });
 
-  it('debe rechazar órdenes cuyo valor en USD supere el límite de riesgo ($150.00)', () => {
+  it('debe rechazar órdenes cuyo valor en USD supere el límite individual de riesgo ($150.00)', () => {
     const riskGuard = new RiskGuard(new Decimal('150'), 20);
 
     const expensiveOrder = {
@@ -63,7 +63,7 @@ describe('RiskGuard - Risk Management & Maker Enforcement Tests', () => {
 
     const result = riskGuard.validateOrder(expensiveOrder, 2);
     expect(result.valid).toBe(false);
-    expect(result.reason).toContain('supera el límite de riesgo');
+    expect(result.reason).toContain('supera el límite individual de riesgo');
   });
 
   it('debe rechazar órdenes si se alcanza el máximo de órdenes abiertas', () => {
@@ -80,5 +80,22 @@ describe('RiskGuard - Risk Management & Maker Enforcement Tests', () => {
     const result = riskGuard.validateOrder(order, 10);
     expect(result.valid).toBe(false);
     expect(result.reason).toContain('Límite máximo de órdenes abiertas alcanzado');
+  });
+
+  it('debe rechazar órdenes si la asignación total proyectada supera el blindaje de capital (MAX_GRID_ALLOCATION_USD)', () => {
+    const riskGuard = new RiskGuard(new Decimal('150'), 20, new Decimal('2000'));
+
+    const order = {
+      symbol: 'BTC/USDT',
+      type: 'limit' as const,
+      side: 'buy' as const,
+      amount: new Decimal('0.002'),
+      price: new Decimal('64000'), // Valor total = $128 USD
+    };
+
+    // Asignación actual = $1,900 USD. Proyectada = $2,028 USD (supera $2,000)
+    const result = riskGuard.validateOrder(order, 5, new Decimal('1900'));
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain('Blindaje de Capital');
   });
 });

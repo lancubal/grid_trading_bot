@@ -30,11 +30,15 @@ export const EnvSchema = z.object({
     .transform((val) => new Decimal(val))
     .default('6000.00'),
 
-  // Parámetros de Riesgo
+  // Parámetros de Riesgo y Blindaje de Capital
   MAX_ORDER_VALUE_USD: z
     .string()
     .transform((val) => new Decimal(val))
     .default('150.00'),
+  MAX_GRID_ALLOCATION_USD: z
+    .string()
+    .transform((val) => new Decimal(val))
+    .default('2000.00'),
   MAX_OPEN_ORDERS: z.coerce.number().int().default(20),
 
   // Base de Datos PostgreSQL

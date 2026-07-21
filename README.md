@@ -18,6 +18,30 @@ El objetivo principal de este proyecto es capturar ganancias a través de oscila
   - Las órdenes `MARKET` o Taker cobran comisiones de hasta **0.20%** por trade (**0.40%** por ciclo completo).
   - Si el bot enviara órdenes a mercado, el costo de $0.40\%$ superaría el beneficio del $0.33\%$, generando una **pérdida neta del -0.07%**.
   - **Enforcement en Código:** El módulo [`RiskGuard`](file:///home/luna/repos/dayTradingBot/src/core/riskGuard.ts) rechaza automáticamente cualquier orden que no sea explícitamente `type: 'limit'` con un precio mayor a 0.
+- **Regla Estructural #3: Blindaje de Capital Asignado (`MAX_GRID_ALLOCATION_USD`):**
+  - Para aislar el patrimonio del usuario, `RiskGuard` rechaza cualquier orden si la asignación proyectada de la grilla supera el límite absoluto especificado en el entorno (ej: `$2,000.00 USD`).
+
+---
+
+## 💻 Cómo Levantar el Dashboard Financiero Local
+
+El proyecto incluye un dashboard web interactivo desarrollado en **Next.js (App Router), Tailwind CSS, TradingView Lightweight Charts y Prisma**.
+
+### Paso 1: Iniciar el Túnel SSH (Conexión Segura a la Base de Datos en AWS EC2)
+Ejecuta en tu terminal local:
+```bash
+ssh -i ./Downloads/trading-bot-key.pem -N -L 5433:localhost:5432 ubuntu@100.27.216.84
+```
+*(Este comando abre un túnel encriptado del puerto local `5433` al puerto PostgreSQL `5432` en AWS sin exponer la base de datos a internet)*.
+
+### Paso 2: Levantar el Dashboard Frontend
+En otra ventana de tu terminal local:
+```bash
+cd dashboard
+npm run dev
+```
+
+Abre tu navegador en: **`http://localhost:3001`**
 
 ---
 
@@ -54,7 +78,7 @@ graph TD
         LVE[Live Volatility Engine - ATR 14]
         LME[Local Matching Engine - Virtual Execution]
         BM[Bootstrapper - Crash Recovery]
-        RG[RiskGuard - Maker Enforcement]
+        RG[RiskGuard - Maker Enforcement & Capital Shield]
     end
 
     subgraph Persistence Layer
@@ -79,8 +103,9 @@ graph TD
 ```plaintext
 .github/
 └── workflows/          # Pipeline CI/CD automatizado para AWS EC2
+dashboard/              # Dashboard Frontend en Next.js (App Router, Tailwind, TradingView)
 src/
-├── config/             # Variables de entorno y validación de configuración de grilla (Zod)
+├── config/             # Variables de entorno y validación Zod (Riesgo y ATR)
 ├── core/               # Lógica de negocio pura, Reconciliación, Matching Engine y ATR
 │   ├── atrCalculator.ts
 │   ├── bootstrapper.ts
@@ -107,7 +132,7 @@ src/
 
 - **Lenguaje:** TypeScript / Node.js
 - **Exchange API:** CCXT (Binance Spot API público).
-- **Testing:** Vitest (24/24 tests unitarios pasados).
+- **Testing:** Vitest (26/26 tests unitarios pasados).
 - **Base de Datos:** PostgreSQL + Prisma ORM.
 - **Validación de Datos:** Zod.
 - **Manejo de Eventos:** `EventEmitter` (nativo de Node.js).
