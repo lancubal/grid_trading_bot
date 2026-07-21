@@ -21,6 +21,26 @@ El objetivo principal de este proyecto es capturar ganancias a través de oscila
 
 ---
 
+## 📊 Fase 1: Módulo de Backtesting Histórico (`npm run backtest`)
+
+El simulador de backtesting descarga datos reales de **velas de 1 minuto (`1m OHLCV`)** de los últimos 7 días usando CCXT para evaluar el rendimiento sin arriesgar capital:
+
+### Resultados del Backtest (Últimos 7 Días - 10,081 velas):
+```text
+⏱️ Período Simulado: 7 Días (168 horas / 10,081 velas de 1m)
+🔄 Total FLIPS Completados: 83 ciclos
+----------------------------------------------------
+💰 Inversión Inicial: $1,000.00 USD
+💵 Ganancia Bruta Acumulada: $19.65 USD
+💸 Comisiones Simuladas (0.05% Maker): $5.60 USD
+📈 BENEFICIO NETO: $14.05 USD (+1.405% ROI en 7 días)
+----------------------------------------------------
+⚠️ Tiempo Inactivo Fuera de Rango ($63,000 - $66,000):
+   └─ Horas inactivo: 10.87 hrs (6.47% del tiempo total)
+```
+
+---
+
 ## 🏗️ Arquitectura del Sistema
 
 El sistema utiliza una arquitectura modular y orientada a eventos dividida en tres capas principales:
@@ -37,6 +57,7 @@ graph TD
         GE[Grid Engine - Core Logic]
         BM[Bootstrapper - Crash Recovery]
         RG[RiskGuard - Maker Enforcement]
+        BT[GridBacktester - Historical Simulation]
     end
 
     subgraph Persistence Layer
@@ -69,6 +90,10 @@ src/
 │   ├── gridManager.test.ts
 │   ├── riskGuard.ts
 │   └── riskGuard.test.ts
+├── backtest/           # Módulo de simulación histórica sobre velas OHLCV 1m
+│   ├── backtester.ts
+│   ├── backtester.test.ts
+│   └── run.ts
 ├── exchange/           # Capa de infraestructura externa (CCXT REST Wrapper & WS Streams)
 │   ├── adapter.ts
 │   ├── streams.ts
@@ -85,7 +110,7 @@ src/
 
 - **Lenguaje:** TypeScript / Node.js
 - **Exchange API:** CCXT (Binance Testnet / Live WS streams gratis).
-- **Testing:** Vitest (17/17 tests unitarios pasados).
+- **Testing:** Vitest (19/19 tests unitarios pasados).
 - **Base de Datos:** PostgreSQL + Prisma ORM.
 - **Validación de Datos:** Zod.
 - **Manejo de Eventos:** `EventEmitter` (nativo de Node.js).
@@ -94,9 +119,14 @@ src/
 
 ---
 
-## 🚀 Instalación y Pruebas
+## 🚀 Comandos Principales
 
-### Ejecutar Tests:
+### Ejecutar Backtest Histórico:
+```bash
+npm run backtest
+```
+
+### Ejecutar Suite de Tests:
 ```bash
 npm test
 ```

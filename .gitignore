@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 
+# Cached historical datasets
+data/*.json
+
 # Environment variables
 .env
 .env.local
