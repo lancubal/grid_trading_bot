@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import Decimal from 'decimal.js';
 import { GridConfigInput } from '../config';
 import { GridLevel, OrderExecutionEvent } from '../types';
+import { AtrCalculator } from './atrCalculator';
 
 export interface SeedOrderPlan {
   levelIndex: number;
@@ -20,6 +21,10 @@ export class GridManager extends EventEmitter {
     this.config = config;
     this.stepSize = this.calculateStepSize();
     this.initGridLevels();
+  }
+
+  public getConfig(): Readonly<GridConfigInput> {
+    return this.config;
   }
 
   /**
@@ -58,8 +63,47 @@ export class GridManager extends EventEmitter {
   }
 
   /**
+   * Ajusta dinámicamente el ancho de la grilla y la separación entre niveles según el indicador ATR
+   */
+  public adjustToVolatility(
+    atr: Decimal,
+    currentMarketPrice: Decimal,
+    multiplier: number = 4.0,
+    minRange: number = 1500,
+    maxRange: number = 6000
+  ): { newLowerPrice: Decimal; newUpperPrice: Decimal; dynamicRange: Decimal; stepSize: Decimal } {
+    const dynamicRange = AtrCalculator.calculateDynamicRange(atr, multiplier, minRange, maxRange);
+    const halfRange = dynamicRange.dividedBy(2);
+
+    const newLowerPrice = currentMarketPrice.minus(halfRange);
+    const newUpperPrice = currentMarketPrice.plus(halfRange);
+
+    this.config = {
+      ...this.config,
+      lowerPrice: newLowerPrice,
+      upperPrice: newUpperPrice,
+    };
+
+    this.stepSize = this.calculateStepSize();
+    this.initGridLevels();
+
+    console.log(
+      `[GridManager ATR] 📈 Volatilidad ATR (${atr.toFixed(2)} USD): Rango adaptado a $${dynamicRange.toFixed(2)} USD (Piso: $${newLowerPrice.toFixed(2)} - Techo: $${newUpperPrice.toFixed(2)} | Escalón: $${this.stepSize.toFixed(2)})`
+    );
+
+    this.emit('grid:rebalanced', {
+      symbol: this.config.symbol,
+      lowerPrice: newLowerPrice,
+      upperPrice: newUpperPrice,
+      dynamicRange,
+      stepSize: this.stepSize,
+    });
+
+    return { newLowerPrice, newUpperPrice, dynamicRange, stepSize: this.stepSize };
+  }
+
+  /**
    * Calcula el plan de siembra inicial de órdenes (Buy Limits por debajo del precio actual, Sell Limits por encima)
-   * @param currentMarketPrice Precio de mercado actual (BTC/USDT)
    */
   public generateSeedOrders(currentMarketPrice: Decimal | number | string): SeedOrderPlan[] {
     const seedOrders: SeedOrderPlan[] = [];
@@ -71,7 +115,6 @@ export class GridManager extends EventEmitter {
       const levelPriceDec = new Decimal(level.price);
 
       if (levelPriceDec.lessThan(currentPriceDec)) {
-        // Nivel por debajo del precio actual: Orden de COMPRA
         const amount = budgetPerLevel.dividedBy(levelPriceDec);
         seedOrders.push({
           levelIndex: level.levelIndex,
@@ -80,7 +123,6 @@ export class GridManager extends EventEmitter {
           amount: amount.toDecimalPlaces(6, Decimal.ROUND_DOWN),
         });
       } else if (levelPriceDec.greaterThan(currentPriceDec)) {
-        // Nivel por encima del precio actual: Orden de VENTA
         const amount = budgetPerLevel.dividedBy(levelPriceDec);
         seedOrders.push({
           levelIndex: level.levelIndex,
