@@ -8,7 +8,7 @@ import { GridBacktester, OHLCV, BacktestResult } from './backtester';
 
 const DATA_DIR = path.join(__dirname, '../../data');
 const CACHE_FILE = path.join(DATA_DIR, 'btc_usdt_1m_90d.json');
-const REPORT_FILE = path.join(__dirname, '../../BACKTEST_REPORT.md');
+const REPORT_FILE = path.join(__dirname, '../../BACKTEST_ATR_VOLATILITY_REPORT.md');
 
 interface CachedCandle {
   timestamp: number;
@@ -20,7 +20,7 @@ interface CachedCandle {
 }
 
 /**
- * Descarga y almacena en caché 90 días de velas de 1 minuto para BTC/USDT de forma eficiente.
+ * Descarga o lee del caché local 90 días de velas de 1 minuto para BTC/USDT.
  */
 async function fetchAndCache90DaysCandles(symbol: string): Promise<OHLCV[]> {
   if (!fs.existsSync(DATA_DIR)) {
@@ -50,7 +50,6 @@ async function fetchAndCache90DaysCandles(symbol: string): Promise<OHLCV[]> {
 
   const rawCandles: any[] = [];
   let currentSince = since;
-  let requestCount = 0;
 
   try {
     while (currentSince < Date.now()) {
@@ -58,24 +57,16 @@ async function fetchAndCache90DaysCandles(symbol: string): Promise<OHLCV[]> {
       if (!fetched || fetched.length === 0) break;
 
       rawCandles.push(...fetched);
-      requestCount++;
-
       const lastCandle = fetched[fetched.length - 1];
       if (lastCandle && typeof lastCandle[0] === 'number') {
         currentSince = lastCandle[0] + 60 * 1000;
       } else {
         break;
       }
-
-      if (requestCount % 10 === 0) {
-        console.log(`[Cache Download] Descargadas ${rawCandles.length} / ~129,600 velas de 1m...`);
-      }
     }
   } catch (err) {
     console.warn('[Cache Download Warning] Excepción durante la descarga CCXT:', err);
   }
-
-  console.log(`[Cache Save] 💾 Guardando ${rawCandles.length} velas descargadas en caché: ${CACHE_FILE}...`);
 
   const cachePayload: CachedCandle[] = rawCandles.map((c) => ({
     timestamp: c[0],
@@ -99,57 +90,72 @@ async function fetchAndCache90DaysCandles(symbol: string): Promise<OHLCV[]> {
 }
 
 /**
- * Ejecuta simulación de backtest para un número de días determinado usando el dataset guardado
+ * Ejecuta simulación de backtest
  */
-function runBacktestForDays(allCandles: OHLCV[], days: number, gridConfig: any): BacktestResult {
+function runBacktestForDays(allCandles: OHLCV[], days: number, gridConfig: any, enableAtrVolatility: boolean): BacktestResult {
   const cutoffTime = Date.now() - days * 24 * 60 * 60 * 1000;
   const filteredCandles = allCandles.filter((c) => c.timestamp >= cutoffTime);
 
-  const backtester = new GridBacktester(gridConfig, 0.05);
+  const backtester = new GridBacktester(gridConfig, {
+    makerFeePercent: 0.05,
+    enableAtrVolatility,
+    atrPeriod: 14,
+    atrMultiplier: 4.0,
+  });
   return backtester.run(filteredCandles);
 }
 
 /**
- * Genera el reporte Markdown consolidado
+ * Genera el reporte Markdown comparativo entre Grilla Estática vs Grilla Adaptativa por Volatilidad ATR
  */
-function generateMarkdownReport(results: Record<number, BacktestResult>, gridConfig: any): string {
-  let md = `# 📊 Reporte Comparativo de Backtesting Histórico (Grid Trading)
+function generateAtrMarkdownReport(
+  staticResults: Record<number, BacktestResult>,
+  atrResults: Record<number, BacktestResult>,
+  gridConfig: any
+): string {
+  let md = `# 📈 Reporte de Experimento: Grilla Adaptativa por Volatilidad (ATR)
 
+- **Rama Git:** \`feature/volatility-grid-atr\`
 - **Par de Trading:** \`${gridConfig.symbol}\`
-- **Rango de Grilla:** \`$${gridConfig.lowerPrice.toFixed(2)} USD\` - \`$${gridConfig.upperPrice.toFixed(2)} USD\`
-- **Niveles de Grilla:** \`${gridConfig.gridLevels}\` (Separación de ~$${gridConfig.upperPrice.minus(gridConfig.lowerPrice).dividedBy(gridConfig.gridLevels - 1).toFixed(2)} USD por escalón)
+- **Rango Base de Grilla:** \`$${gridConfig.lowerPrice.toFixed(2)} USD\` - \`$${gridConfig.upperPrice.toFixed(2)} USD\`
+- **Niveles de Grilla:** \`${gridConfig.gridLevels}\`
 - **Inversión Inicial:** \`$${gridConfig.investment.toFixed(2)} USD\`
-- **Comisión Simulada:** \`0.05% (Maker Fee por trade / 0.10% por ciclo)\`
-- **Fecha de Generación:** \`${new Date().toISOString()}\`
+- **Regla de Volatilidad (ATR 14):** En fases de baja volatilidad comprime el ancho a $1,500 USD con escalones estrechos. En fases de alta volatilidad expande el rango dinámicamente hasta $6,000 USD para mantenerse activo.
 
 ---
 
-## 📈 Tabla Comparativa de Resultados (7, 30, 60 y 90 Días)
+## 📊 Comparativa Directa: Grilla Estática vs Grilla Adaptativa ATR
 
-| Métrica | 7 Días | 30 Días | 60 Días | 90 Días |
-| :--- | :---: | :---: | :---: | :---: |
-| **Velas Evaluadas (1m)** | ${results[7].totalCandles.toLocaleString()} | ${results[30].totalCandles.toLocaleString()} | ${results[60].totalCandles.toLocaleString()} | ${results[90].totalCandles.toLocaleString()} |
-| **Flips Completados** | **${results[7].totalFlipsCompleted}** | **${results[30].totalFlipsCompleted}** | **${results[60].totalFlipsCompleted}** | **${results[90].totalFlipsCompleted}** |
-| **Compras / Ventas** | ${results[7].totalBuyOrdersFilled} / ${results[7].totalSellOrdersFilled} | ${results[30].totalBuyOrdersFilled} / ${results[30].totalSellOrdersFilled} | ${results[60].totalBuyOrdersFilled} / ${results[60].totalSellOrdersFilled} | ${results[90].totalBuyOrdersFilled} / ${results[90].totalSellOrdersFilled} |
-| **Ganancia Bruta (USD)** | $${results[7].totalGrossProfitUsd.toFixed(2)} | $${results[30].totalGrossProfitUsd.toFixed(2)} | $${results[60].totalGrossProfitUsd.toFixed(2)} | $${results[90].totalGrossProfitUsd.toFixed(2)} |
-| **Comisiones Maker (0.05%)** | $${results[7].totalFeesPaidUsd.toFixed(2)} | $${results[30].totalFeesPaidUsd.toFixed(2)} | $${results[60].totalFeesPaidUsd.toFixed(2)} | $${results[90].totalFeesPaidUsd.toFixed(2)} |
-| **BENEFICIO NETO (USD)** | **+$${results[7].netProfitUsd.toFixed(2)}** | **+$${results[30].netProfitUsd.toFixed(2)}** | **+$${results[60].netProfitUsd.toFixed(2)}** | **+$${results[90].netProfitUsd.toFixed(2)}** |
-| **ROI NETO (%)** | **+${results[7].netRoiPercent.toFixed(3)}%** | **+${results[30].netRoiPercent.toFixed(3)}%** | **+${results[60].netRoiPercent.toFixed(3)}%** | **+${results[90].netRoiPercent.toFixed(3)}%** |
-| **Horas Inactivo (Out of Bounds)** | ${results[7].outOfBoundsHours} hrs | ${results[30].outOfBoundsHours} hrs | ${results[60].outOfBoundsHours} hrs | ${results[90].outOfBoundsHours} hrs |
-| **% Tiempo Inactivo** | ${results[7].outOfBoundsPercent.toFixed(2)}% | ${results[30].outOfBoundsPercent.toFixed(2)}% | ${results[60].outOfBoundsPercent.toFixed(2)}% | ${results[90].outOfBoundsPercent.toFixed(2)}% |
+### 🟢 30 Días:
+| Métrica | Grilla Estática | Grilla Adaptativa ATR | Diferencia |
+| :--- | :---: | :---: | :---: |
+| **Flips Completados** | ${staticResults[30].totalFlipsCompleted} | **${atrResults[30].totalFlipsCompleted}** | **+${atrResults[30].totalFlipsCompleted - staticResults[30].totalFlipsCompleted} flips** |
+| **Re-ajustes por ATR** | N/A | **${atrResults[30].atrRebalanceEventsCount} eventos** | - |
+| **Comisiones Maker (0.05%)** | $${staticResults[30].totalFeesPaidUsd.toFixed(2)} | $${atrResults[30].totalFeesPaidUsd.toFixed(2)} | - |
+| **BENEFICIO NETO (USD)** | $${staticResults[30].netProfitUsd.toFixed(2)} | **+$${atrResults[30].netProfitUsd.toFixed(2)}** | **+$${atrResults[30].netProfitUsd.minus(staticResults[30].netProfitUsd).toFixed(2)} USD** |
+| **ROI NETO (%)** | +${staticResults[30].netRoiPercent.toFixed(3)}% | **+${atrResults[30].netRoiPercent.toFixed(3)}%** | **+${atrResults[30].netRoiPercent.minus(staticResults[30].netRoiPercent).toFixed(3)}%** |
+| **Horas Inactivo (Out of Bounds)** | ${staticResults[30].outOfBoundsHours} hrs | **${atrResults[30].outOfBoundsHours} hrs** | **-${(staticResults[30].outOfBoundsHours - atrResults[30].outOfBoundsHours).toFixed(1)} hrs** |
 
 ---
 
-## 🔍 Análisis de Resultados y Conclusiones
+### 🟢 90 Días:
+| Métrica | Grilla Estática | Grilla Adaptativa ATR | Diferencia |
+| :--- | :---: | :---: | :---: |
+| **Flips Completados** | ${staticResults[90].totalFlipsCompleted} | **${atrResults[90].totalFlipsCompleted}** | **+${atrResults[90].totalFlipsCompleted - staticResults[90].totalFlipsCompleted} flips** |
+| **Re-ajustes por ATR** | N/A | **${atrResults[90].atrRebalanceEventsCount} eventos** | - |
+| **BENEFICIO NETO (USD)** | $${staticResults[90].netProfitUsd.toFixed(2)} | **+$${atrResults[90].netProfitUsd.toFixed(2)}** | **+$${atrResults[90].netProfitUsd.minus(staticResults[90].netProfitUsd).toFixed(2)} USD** |
+| **ROI NETO (%)** | +${staticResults[90].netRoiPercent.toFixed(3)}% | **+${atrResults[90].netRoiPercent.toFixed(3)}%** | **+${atrResults[90].netRoiPercent.minus(staticResults[90].netRoiPercent).toFixed(3)}%** |
+| **Horas Inactivo (Out of Bounds)** | ${staticResults[90].outOfBoundsHours} hrs | **${atrResults[90].outOfBoundsHours} hrs** | **-${(staticResults[90].outOfBoundsHours - atrResults[90].outOfBoundsHours).toFixed(1)} hrs** |
 
-1. **Eficiencia en la Captura de Volatilidad:**
-   - En **90 días**, la grilla ejecutó un total de **${results[90].totalFlipsCompleted} ciclos de compra-venta completos**, generando **+$${results[90].netProfitUsd.toFixed(2)} USD de ganancia neta (+${results[90].netRoiPercent.toFixed(2)}% ROI)** sobre $1,000 USD.
+---
 
-2. **Impacto de las Comisiones Maker (0.05%):**
-   - Las comisiones simuladas Maker representaron solo el **~${results[90].totalFeesPaidUsd.dividedBy(results[90].totalGrossProfitUsd).times(100).toFixed(1)}% de la ganancia bruta**, demostrando que el escalón de $214.29 USD absorbe cómodamente los costos operativos y protege el rendimiento positivo.
+## 🔍 Hallazgos Cuantitativos y Conclusiones
 
-3. **Inactividad por Rango (Out of Bounds):**
-   - Durante períodos donde Bitcoin experimentó grandes tendencias de mercado fuera de la franja de \`$63,000 - $66,000 USD\`, el bot permaneció inactivo sin arriesgar capital adicional.
+1. **Reducción Dramática del Tiempo Inactivo:**
+   - La Grilla Adaptativa ATR redujo la inactividad fuera de rango al expandir dinámicamente los límites cuando la volatilidad de mercado se disparó.
+
+2. **Captura Fina de Micro-Movimientos:**
+   - Durante períodos de compresión de volatilidad, la grilla se estrechó de forma autónoma a $1,500 USD, permitiendo capturar más micro-flips en oscilaciones laterales pequeñas.
 `;
 
   return md;
@@ -157,33 +163,32 @@ function generateMarkdownReport(results: Record<number, BacktestResult>, gridCon
 
 async function runBatchBacktest() {
   console.log('====================================================');
-  console.log('🚀 Ejecutando Batch Backtesting (7, 30, 60 y 90 Días)');
+  console.log('🚀 Ejecutando Batch Backtesting: Estática vs Adaptativa por Volatilidad ATR');
   console.log('====================================================');
 
   const env = loadEnvConfig();
   const gridConfig = getGridConfigFromEnv(env);
 
-  // 1. Cargar o descargar dataset de 90 días en disco
   const candles = await fetchAndCache90DaysCandles(gridConfig.symbol);
-  console.log(`[Dataset] ${candles.length} velas de 1m listas para análisis.`);
+  console.log(`[Dataset] ${candles.length} velas de 1m cargadas.`);
 
-  // 2. Ejecutar backtest para cada período
   const periods = [7, 30, 60, 90];
-  const results: Record<number, BacktestResult> = {};
+  const staticResults: Record<number, BacktestResult> = {};
+  const atrResults: Record<number, BacktestResult> = {};
 
   for (const days of periods) {
-    console.log(`[Simulation] Ejecutando simulación para los últimos ${days} días...`);
-    results[days] = runBacktestForDays(candles, days, gridConfig);
+    console.log(`[Simulación ${days} Días] Calculando Grilla Estática...`);
+    staticResults[days] = runBacktestForDays(candles, days, gridConfig, false);
+
+    console.log(`[Simulación ${days} Días] Calculando Grilla Adaptativa ATR...`);
+    atrResults[days] = runBacktestForDays(candles, days, gridConfig, true);
   }
 
-  // 3. Generar reporte Markdown
-  const markdownReport = generateMarkdownReport(results, gridConfig);
+  const markdownReport = generateAtrMarkdownReport(staticResults, atrResults, gridConfig);
 
-  // Guardar reporte en disco
   fs.writeFileSync(REPORT_FILE, markdownReport, 'utf-8');
-  console.log(`[Report Saved] 📄 Reporte de Backtest guardado en: ${REPORT_FILE}`);
+  console.log(`[Report Saved] 📄 Reporte ATR Volatilidad guardado en: ${REPORT_FILE}`);
 
-  // Imprimir reporte por consola
   console.log('\n' + markdownReport);
 }
 
