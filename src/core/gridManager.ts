@@ -14,12 +14,25 @@ export class GridManager extends EventEmitter {
   private config: GridConfigInput;
   private levels: GridLevel[] = [];
   private stepSize: Decimal;
+  private consecutiveLowerBreaches: number = 0;
+  private readonly breachThreshold: number;
+  private stopLossPercent: Decimal;
 
-  constructor(config: GridConfigInput) {
+  constructor(
+    config: GridConfigInput,
+    breachThreshold: number = 4,
+    stopLossPercent: Decimal | number = new Decimal(3)
+  ) {
     super();
     this.config = config;
+    this.breachThreshold = breachThreshold;
+    this.stopLossPercent = new Decimal(stopLossPercent);
     this.stepSize = this.calculateStepSize();
     this.initGridLevels();
+  }
+
+  public getConfig(): Readonly<GridConfigInput> {
+    return this.config;
   }
 
   /**
@@ -58,8 +71,61 @@ export class GridManager extends EventEmitter {
   }
 
   /**
+   * Re-dibuja la grilla centrada en un nuevo precio de mercado (Trailing Down)
+   */
+  public rebalanceGrid(newCenterPrice: Decimal): { newLowerPrice: Decimal; newUpperPrice: Decimal } {
+    const totalRange = this.config.upperPrice.minus(this.config.lowerPrice);
+    const halfRange = totalRange.dividedBy(2);
+
+    const newLowerPrice = newCenterPrice.minus(halfRange);
+    const newUpperPrice = newCenterPrice.plus(halfRange);
+
+    this.config = {
+      ...this.config,
+      lowerPrice: newLowerPrice,
+      upperPrice: newUpperPrice,
+    };
+
+    this.stepSize = this.calculateStepSize();
+    this.initGridLevels();
+    this.consecutiveLowerBreaches = 0;
+
+    console.log(`[GridManager] ⚠️ TRAILING DOWN / STOP LOSS: Grilla re-centrada en $${newCenterPrice.toFixed(2)} USD (Nuevo Rango: $${newLowerPrice.toFixed(2)} - $${newUpperPrice.toFixed(2)})`);
+
+    this.emit('grid:rebalanced', {
+      symbol: this.config.symbol,
+      lowerPrice: newLowerPrice,
+      upperPrice: newUpperPrice,
+    });
+
+    return { newLowerPrice, newUpperPrice };
+  }
+
+  /**
+   * Monitorea si el precio rompe el piso de la grilla por debajo del porcentaje de Stop-Loss (ej. 3%)
+   */
+  public checkTrailingDown(closePrice: Decimal): boolean {
+    const priceDec = new Decimal(closePrice);
+    const stopLossMultiplier = new Decimal(1).minus(this.stopLossPercent.dividedBy(100));
+    const stopLossTriggerPrice = this.config.lowerPrice.times(stopLossMultiplier);
+
+    if (priceDec.lessThan(stopLossTriggerPrice)) {
+      this.consecutiveLowerBreaches++;
+      console.log(`[GridManager Trailing Down] RUPTURA DE PISO STOP-LOSS (${this.consecutiveLowerBreaches}/${this.breachThreshold}) @ $${priceDec.toFixed(2)} (Trigger: $${stopLossTriggerPrice.toFixed(2)})`);
+
+      if (this.consecutiveLowerBreaches >= this.breachThreshold) {
+        this.rebalanceGrid(priceDec);
+        return true;
+      }
+    } else {
+      this.consecutiveLowerBreaches = 0;
+    }
+
+    return false;
+  }
+
+  /**
    * Calcula el plan de siembra inicial de órdenes (Buy Limits por debajo del precio actual, Sell Limits por encima)
-   * @param currentMarketPrice Precio de mercado actual (BTC/USDT)
    */
   public generateSeedOrders(currentMarketPrice: Decimal | number | string): SeedOrderPlan[] {
     const seedOrders: SeedOrderPlan[] = [];
@@ -71,7 +137,6 @@ export class GridManager extends EventEmitter {
       const levelPriceDec = new Decimal(level.price);
 
       if (levelPriceDec.lessThan(currentPriceDec)) {
-        // Nivel por debajo del precio actual: Orden de COMPRA
         const amount = budgetPerLevel.dividedBy(levelPriceDec);
         seedOrders.push({
           levelIndex: level.levelIndex,
@@ -80,7 +145,6 @@ export class GridManager extends EventEmitter {
           amount: amount.toDecimalPlaces(6, Decimal.ROUND_DOWN),
         });
       } else if (levelPriceDec.greaterThan(currentPriceDec)) {
-        // Nivel por encima del precio actual: Orden de VENTA
         const amount = budgetPerLevel.dividedBy(levelPriceDec);
         seedOrders.push({
           levelIndex: level.levelIndex,
