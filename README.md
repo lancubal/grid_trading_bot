@@ -21,23 +21,15 @@ El objetivo principal de este proyecto es capturar ganancias a través de oscila
 
 ---
 
-## 📊 Fase 1: Módulo de Backtesting Histórico (`npm run backtest`)
+## 📊 Módulo de Backtesting Histórico (`npm run backtest` / `npm run backtest:batch`)
 
-El simulador de backtesting descarga datos reales de **velas de 1 minuto (`1m OHLCV`)** de los últimos 7 días usando CCXT para evaluar el rendimiento sin arriesgar capital:
+El simulador de backtesting descarga datos reales de **velas de 1 minuto (`1m OHLCV`)** de los últimos 90 días usando CCXT y los almacena en caché local (`data/btc_usdt_1m_90d.json` - 129,601 velas) para evaluar estrategias de forma instantánea.
 
-### Resultados del Backtest (Últimos 7 Días - 10,081 velas):
-```text
-⏱️ Período Simulado: 7 Días (168 horas / 10,081 velas de 1m)
-🔄 Total FLIPS Completados: 83 ciclos
-----------------------------------------------------
-💰 Inversión Inicial: $1,000.00 USD
-💵 Ganancia Bruta Acumulada: $19.65 USD
-💸 Comisiones Simuladas (0.05% Maker): $5.60 USD
-📈 BENEFICIO NETO: $14.05 USD (+1.405% ROI en 7 días)
-----------------------------------------------------
-⚠️ Tiempo Inactivo Fuera de Rango ($63,000 - $66,000):
-   └─ Horas inactivo: 10.87 hrs (6.47% del tiempo total)
-```
+### 📄 Reportes Disponibles en la Rama Main:
+- 📌 **Reporte Base (Grilla Estática):** [`BACKTEST_REPORT.md`](file:///home/luna/repos/dayTradingBot/BACKTEST_REPORT.md) (+7.574% ROI en 90 días).
+- 📌 **Estrategia 1 (Trailing Up):** [`BACKTEST_TRAILING_UP_REPORT.md`](file:///home/luna/repos/dayTradingBot/BACKTEST_TRAILING_UP_REPORT.md) (+3.456% ROI en 30 días).
+- 📌 **Estrategia 2 (Trailing Down / Stop-Loss):** [`BACKTEST_TRAILING_DOWN_REPORT.md`](file:///home/luna/repos/dayTradingBot/BACKTEST_TRAILING_DOWN_REPORT.md) (-1.984% ROI a 30 días por liquidación a pérdida).
+- 📌 **Estrategia 3 (Grilla Adaptativa ATR):** [`BACKTEST_ATR_VOLATILITY_REPORT.md`](file:///home/luna/repos/dayTradingBot/BACKTEST_ATR_VOLATILITY_REPORT.md) (**+31.127% ROI en 90 días**).
 
 ---
 
@@ -93,6 +85,7 @@ src/
 ├── backtest/           # Módulo de simulación histórica sobre velas OHLCV 1m
 │   ├── backtester.ts
 │   ├── backtester.test.ts
+│   ├── batch.ts
 │   └── run.ts
 ├── exchange/           # Capa de infraestructura externa (CCXT REST Wrapper & WS Streams)
 │   ├── adapter.ts
@@ -121,9 +114,14 @@ src/
 
 ## 🚀 Comandos Principales
 
-### Ejecutar Backtest Histórico:
+### Ejecutar Backtest Histórico Individual:
 ```bash
 npm run backtest
+```
+
+### Ejecutar Batch Backtest con Caché Local (90 días):
+```bash
+npm run backtest:batch
 ```
 
 ### Ejecutar Suite de Tests:
