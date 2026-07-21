@@ -27,7 +27,7 @@ graph TD
 4. **Tipo de Instancia:** `t3.micro` (Elegible para capa gratuita) o `t3.small` (Recomendada).
 5. **Key Pair:** Crea o selecciona un par de llaves SSH (ej: `trading-bot-key.pem`).
 6. **Network Settings (Security Group):**
-   - Regla 1: SSH (Puerto `22`) - Permitir desde cualquier IP o IP personalizada.
+   - Regla 1: SSH (Puerto `22`) - Permitir desde cualquier IP (`0.0.0.0/0`) o IP personalizada.
 7. **Almacenamiento:** 15 GB General Purpose SSD (gp3).
 8. Haz clic en **Launch Instance**.
 
@@ -37,7 +37,7 @@ graph TD
 
 Conéctate a tu instancia EC2 por SSH desde tu terminal:
 ```bash
-ssh -i /ruta/a/tu-llave.pem ubuntu@TU_IP_PUBLICA_AWS
+ssh -i ./Downloads/trading-bot-key.pem ubuntu@100.27.216.84
 ```
 
 Una vez dentro de la consola de la instancia EC2, ejecuta los siguientes comandos para instalar Docker y Git:
@@ -65,7 +65,7 @@ cat ~/.ssh/id_ed25519.pub
 
 En tu repositorio de GitHub, ve a **Settings ➔ Secrets and variables ➔ Actions ➔ New repository secret**:
 
-1. **`AWS_HOST`**: La IP pública de tu instancia AWS EC2 (ej: `54.210.120.45`).
+1. **`AWS_HOST`**: La IP pública de tu instancia AWS EC2 (ej: `100.27.216.84`).
 2. **`AWS_USERNAME`**: `ubuntu`
 3. **`AWS_SSH_KEY`**: El contenido completo de tu llave privada `.pem` descargada de AWS.
 4. **`ENV_FILE`**: El contenido completo de tu archivo `.env` configurado para producción o Shadow Trading:
@@ -105,7 +105,7 @@ Cada vez que hagas `git push origin main`, GitHub Actions ejecutará automática
 Para consultar los logs en vivo del bot desplegado en AWS:
 ```bash
 # Conectarse a la EC2
-ssh -i /ruta/a/tu-llave.pem ubuntu@TU_IP_PUBLICA_AWS
+ssh -i ./Downloads/trading-bot-key.pem ubuntu@100.27.216.84
 
 # Ver logs en tiempo real del contenedor del bot
 docker logs -f grid_trading_bot
