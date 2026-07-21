@@ -1,0 +1,44 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum OrderStatus {
+  PENDING
+  OPEN
+  FILLED
+  CANCELED
+  REJECTED
+}
+
+model GridLevel {
+  levelIndex Int      @id
+  price      Decimal  @db.Decimal(18, 8)
+  isHolding  Boolean  @default(false)
+  orders     Order[]
+  updatedAt  DateTime @updatedAt
+}
+
+model Order {
+  id          String      @id @default(uuid())
+  exchangeId  String?     @unique
+  symbol      String
+  side        OrderSide
+  price       Decimal     @db.Decimal(18, 8)
+  amount      Decimal     @db.Decimal(18, 8)
+  fee         Decimal?    @db.Decimal(18, 8)
+  status      OrderStatus @default(PENDING)
+  gridLevelId Int
+  gridLevel   GridLevel   @relation(fields: [gridLevelId], references: [levelIndex])
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
