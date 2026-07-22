@@ -9,6 +9,27 @@ export class StateRepository {
   }
 
   /**
+   * Guarda o actualiza una configuración dinámica del bot en la BD
+   */
+  public async setBotConfig(key: string, value: string): Promise<void> {
+    await this.prisma.botConfig.upsert({
+      where: { key },
+      update: { value },
+      create: { key, value },
+    });
+  }
+
+  /**
+   * Obtiene el valor de una configuración dinámica en la BD
+   */
+  public async getBotConfig(key: string): Promise<string | null> {
+    const record = await this.prisma.botConfig.findUnique({
+      where: { key },
+    });
+    return record ? record.value : null;
+  }
+
+  /**
    * Guarda o actualiza un nivel de la grilla en la BD.
    */
   public async upsertGridLevel(levelIndex: number, price: Decimal, isHolding: boolean = false) {

@@ -16,6 +16,7 @@ export interface DashboardStats {
   maxGridRange: number;
   btcBalance: number;
   usdtBalance: number;
+  gridInvestmentUsd: number;
 }
 
 export interface SystemAgeInfo {
@@ -35,6 +36,13 @@ export interface SystemAgeInfo {
  */
 export async function getDashboardStats(): Promise<DashboardStats> {
   try {
+    // Consultar configuración dinámica en PostgreSQL
+    const configRecord = await prisma.botConfig.findUnique({
+      where: { key: 'GRID_INVESTMENT' },
+    });
+    const currentInvestmentVal = configRecord ? configRecord.value : process.env.GRID_INVESTMENT || '1000.00';
+    const initialInvestment = new Decimal(currentInvestmentVal);
+
     const filledOrders = await prisma.order.findMany({
       where: { status: 'FILLED' },
       orderBy: { updatedAt: 'asc' },
@@ -81,7 +89,6 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       }
     }
 
-    const initialInvestment = new Decimal(process.env.GRID_INVESTMENT || '1000.00');
     const roiPercent = initialInvestment.isZero()
       ? 0
       : netProfitUsd.dividedBy(initialInvestment).times(100).toNumber();
@@ -93,13 +100,13 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     let minRange = 63000;
     let maxRange = 66000;
     let btcBalance = 0;
-    let usdtBalance = 1000;
+    let usdtBalance = initialInvestment.toNumber();
 
     if (gridLevels.length > 0) {
       minRange = Number(gridLevels[0].price);
       maxRange = Number(gridLevels[gridLevels.length - 1].price);
       btcBalance = gridLevels.filter((g) => g.isHolding).length * 0.0011;
-      usdtBalance = Math.max(0, 1000 - btcBalance * minRange);
+      usdtBalance = Math.max(0, initialInvestment.toNumber() - btcBalance * minRange);
     }
 
     return {
@@ -115,6 +122,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       maxGridRange: maxRange,
       btcBalance: Number(btcBalance.toFixed(4)),
       usdtBalance: Number(usdtBalance.toFixed(2)),
+      gridInvestmentUsd: initialInvestment.toNumber(),
     };
   } catch (err) {
     console.error('Error fetching dashboard stats:', err);
@@ -131,7 +139,30 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       maxGridRange: 66000,
       btcBalance: 0,
       usdtBalance: 1000,
+      gridInvestmentUsd: 1000,
     };
+  }
+}
+
+/**
+ * Actualiza el capital de inversión del bot dinámicamente en PostgreSQL
+ */
+export async function updateGridInvestment(newInvestmentUsd: number): Promise<{ success: boolean; message?: string }> {
+  try {
+    if (newInvestmentUsd < 100 || newInvestmentUsd > 100000) {
+      return { success: false, message: 'El capital asignado debe estar entre $100 y $100,000 USD.' };
+    }
+
+    await prisma.botConfig.upsert({
+      where: { key: 'GRID_INVESTMENT' },
+      update: { value: newInvestmentUsd.toString() },
+      create: { key: 'GRID_INVESTMENT', value: newInvestmentUsd.toString() },
+    });
+
+    return { success: true };
+  } catch (err) {
+    console.error('Error updating grid investment:', err);
+    return { success: false, message: 'Error guardando en PostgreSQL.' };
   }
 }
 
@@ -151,7 +182,7 @@ export async function getSystemAgeInfo(): Promise<SystemAgeInfo> {
         ageInHours: 0,
         ageInDays: 0,
         availablePeriods: {
-          '24h': true, // Permitir 24h para pruebas si hay órdenes recientes
+          '24h': true,
           '7d': false,
           '30d': false,
           '90d': false,
@@ -169,7 +200,7 @@ export async function getSystemAgeInfo(): Promise<SystemAgeInfo> {
       ageInHours: Number(ageInHours.toFixed(1)),
       ageInDays: Number(ageInDays.toFixed(1)),
       availablePeriods: {
-        '24h': true, // Siempre disponible para ver la actividad del primer día
+        '24h': true,
         '7d': ageInDays >= 7,
         '30d': ageInDays >= 30,
         '90d': ageInDays >= 90,
@@ -214,6 +245,11 @@ export async function generatePerformanceReport(periodKey: '24h' | '7d' | '30d' 
         reason: `El reporte para ${periodLabels[periodKey]} requiere al menos la antigüedad correspondiente. Antigüedad actual del sistema: ${ageInfo.ageInDays} días (${ageInfo.ageInHours} horas).`,
       };
     }
+
+    const configRecord = await prisma.botConfig.findUnique({
+      where: { key: 'GRID_INVESTMENT' },
+    });
+    const initialInvestment = new Decimal(configRecord ? configRecord.value : process.env.GRID_INVESTMENT || '1000.00');
 
     const now = new Date();
     let periodStart = new Date();
@@ -265,7 +301,6 @@ export async function generatePerformanceReport(periodKey: '24h' | '7d' | '30d' 
       }
     }
 
-    const initialInvestment = new Decimal(process.env.GRID_INVESTMENT || '1000.00');
     const roiPercent = initialInvestment.isZero()
       ? 0
       : netProfitUsd.dividedBy(initialInvestment).times(100).toNumber();

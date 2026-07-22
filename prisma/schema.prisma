@@ -42,3 +42,9 @@ model Order {
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 }
+
+model BotConfig {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}

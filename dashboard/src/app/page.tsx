@@ -23,6 +23,7 @@ export default function DashboardPage() {
     maxGridRange: 66000,
     btcBalance: 0,
     usdtBalance: 1000,
+    gridInvestmentUsd: 1000,
   });
 
   const [gridLevels, setGridLevels] = useState<any[]>([]);

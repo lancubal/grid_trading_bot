@@ -1,8 +1,8 @@
 'use client';
 
-import React from 'react';
-import { Activity, ShieldAlert, ArrowUpRight, Repeat, Zap, RefreshCw } from 'lucide-react';
-import { DashboardStats } from '../lib/actions';
+import React, { useState } from 'react';
+import { Activity, ShieldAlert, ArrowUpRight, Repeat, Zap, RefreshCw, DollarSign, Edit3, Check, X } from 'lucide-react';
+import { DashboardStats, updateGridInvestment } from '../lib/actions';
 
 interface HeaderKPIProps {
   stats: DashboardStats;
@@ -12,6 +12,11 @@ interface HeaderKPIProps {
 }
 
 export function HeaderKPI({ stats, currentPrice, onRefresh, isRefreshing }: HeaderKPIProps) {
+  const [isEditingInvestment, setIsEditingInvestment] = useState<boolean>(false);
+  const [newInvestmentInput, setNewInvestmentInput] = useState<string>(stats.gridInvestmentUsd?.toString() || '1000');
+  const [isSavingInvestment, setIsSavingInvestment] = useState<boolean>(false);
+  const [investmentError, setInvestmentError] = useState<string | null>(null);
+
   const isOutOfBounds =
     currentPrice > 0 &&
     (currentPrice < stats.minGridRange || currentPrice > stats.maxGridRange);
@@ -34,11 +39,31 @@ export function HeaderKPI({ stats, currentPrice, onRefresh, isRefreshing }: Head
     ? 'bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.8)]'
     : 'bg-rose-400 shadow-[0_0_8px_rgba(239,68,68,0.8)]';
 
+  const handleSaveInvestment = async () => {
+    const parsedVal = parseFloat(newInvestmentInput);
+    if (isNaN(parsedVal) || parsedVal < 100 || parsedVal > 100000) {
+      setInvestmentError('Ingresa un monto válido entre $100 y $100,000 USD');
+      return;
+    }
+
+    setIsSavingInvestment(true);
+    setInvestmentError(null);
+
+    const res = await updateGridInvestment(parsedVal);
+    if (res.success) {
+      setIsEditingInvestment(false);
+      onRefresh();
+    } else {
+      setInvestmentError(res.message || 'Error al actualizar capital');
+    }
+    setIsSavingInvestment(false);
+  };
+
   return (
     <header className="glass-panel p-4 rounded-xl shadow-2xl space-y-4">
       {/* Top Meta Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-3">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-semibold tracking-wide uppercase glass-card">
             <Activity className="w-4 h-4 text-cyan-400 animate-pulse" />
             <span className="text-slate-300">BOT BTC/USDT</span>
@@ -55,6 +80,53 @@ export function HeaderKPI({ stats, currentPrice, onRefresh, isRefreshing }: Head
             <ShieldAlert className="w-4 h-4 text-purple-400" />
             <span>{stats.isDryRun ? 'SHADOW TRADING (DRY-RUN)' : 'LIVE PRODUCTION'}</span>
           </div>
+
+          {/* Widget Modificar Capital Asignado */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-xs font-semibold">
+            <DollarSign className="w-4 h-4 text-emerald-400" />
+            {!isEditingInvestment ? (
+              <div className="flex items-center gap-2">
+                <span>Capital Grilla: <strong className="text-white">${stats.gridInvestmentUsd?.toLocaleString() || '1,000'} USD</strong></span>
+                <button
+                  onClick={() => {
+                    setNewInvestmentInput((stats.gridInvestmentUsd || 1000).toString());
+                    setIsEditingInvestment(true);
+                  }}
+                  title="Ajustar Capital de Grilla"
+                  className="p-1 hover:bg-emerald-500/20 rounded text-emerald-400 transition"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-300">$</span>
+                <input
+                  type="number"
+                  value={newInvestmentInput}
+                  onChange={(e) => setNewInvestmentInput(e.target.value)}
+                  className="w-20 px-2 py-0.5 bg-slate-950 border border-emerald-500/50 rounded text-white text-xs font-mono focus:outline-none"
+                  placeholder="2000"
+                />
+                <span className="text-slate-400">USD</span>
+                <button
+                  onClick={handleSaveInvestment}
+                  disabled={isSavingInvestment}
+                  className="p-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded transition"
+                  title="Guardar nuevo capital"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setIsEditingInvestment(false)}
+                  className="p-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition"
+                  title="Cancelar"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Botón Refrescar */}
@@ -67,6 +139,12 @@ export function HeaderKPI({ stats, currentPrice, onRefresh, isRefreshing }: Head
           <span>Sincronizar DB</span>
         </button>
       </div>
+
+      {investmentError && (
+        <div className="text-xs text-rose-400 bg-rose-500/10 p-2 rounded border border-rose-500/20">
+          {investmentError}
+        </div>
+      )}
 
       {/* Grid de 4 Cards KPI */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
