@@ -26,12 +26,12 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     const filledOrders = await prisma.order.findMany({
       where: { status: 'FILLED' },
       orderBy: { updatedAt: 'asc' },
-      select: { side: true, price: true, amount: true, fee: true, createdAt: true },
+      select: { side: true, price: true, amount: true, fee: true, gridLevelId: true, createdAt: true },
     });
 
-    const buys = filledOrders.filter((o) => o.side === 'BUY');
-    const sells = filledOrders.filter((o) => o.side === 'SELL');
-    const completedFlips = sells.length;
+    const buyOrders = filledOrders.filter((o) => o.side === 'BUY');
+    const sellOrders = filledOrders.filter((o) => o.side === 'SELL');
+    const completedFlips = sellOrders.length;
 
     let netProfitUsd = new Decimal(0);
     let totalVolumeUsd = new Decimal(0);
@@ -45,20 +45,31 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       totalVolumeUsd = totalVolumeUsd.plus(price.times(amount));
     }
 
-    // Calcular ganancia neta estricta solo para ciclos completados (Compras + Ventas emparejadas)
-    if (sells.length > 0) {
-      for (let i = 0; i < sells.length; i++) {
-        const sellPrice = new Decimal(sells[i].price.toString());
-        const sellAmount = new Decimal(sells[i].amount.toString());
-        const buyPrice = buys[i] ? new Decimal(buys[i].price.toString()) : sellPrice.minus(200);
+    // Calcular ganancia neta estricta para cada ciclo completado (Venta realizada)
+    if (sellOrders.length > 0) {
+      for (const sell of sellOrders) {
+        const sellPrice = new Decimal(sell.price.toString());
+        const amount = new Decimal(sell.amount.toString());
 
-        const grossSpread = sellPrice.minus(buyPrice).times(sellAmount);
-        const buyFee = buyPrice.times(sellAmount).times(0.0005);
-        const sellFee = sellPrice.times(sellAmount).times(0.0005);
-        netProfitUsd = netProfitUsd.plus(grossSpread.minus(buyFee).minus(sellFee));
+        // Buscar la compra correspondiente en el nivel inferior o mismo nivel
+        const matchingBuy = buyOrders.find(
+          (b) => b.gridLevelId === sell.gridLevelId - 1 || b.gridLevelId === sell.gridLevelId
+        );
+
+        // Si existe compra previa emparejada, se usa su precio; de lo contrario se calcula un spread estimado del 0.33%
+        const buyPrice = matchingBuy
+          ? new Decimal(matchingBuy.price.toString())
+          : sellPrice.dividedBy(1.0033);
+
+        const grossSpread = sellPrice.minus(buyPrice).times(amount);
+        const buyFee = buyPrice.times(amount).times(0.0005);
+        const sellFee = sellPrice.times(amount).times(0.0005);
+
+        const cycleNet = grossSpread.minus(buyFee).minus(sellFee);
+        if (cycleNet.greaterThan(0)) {
+          netProfitUsd = netProfitUsd.plus(cycleNet);
+        }
       }
-    } else {
-      netProfitUsd = new Decimal(0);
     }
 
     const initialInvestment = new Decimal(process.env.GRID_INVESTMENT || '1000.00');
@@ -83,7 +94,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     }
 
     return {
-      netProfitUsd: Math.max(0, Number(netProfitUsd.toFixed(2))),
+      netProfitUsd: Number(netProfitUsd.toFixed(2)),
       roiPercent: Number(roiPercent.toFixed(2)),
       totalFlips: completedFlips,
       totalVolumeUsd: Number(totalVolumeUsd.toFixed(2)),
@@ -132,7 +143,6 @@ export async function getGridLadder() {
 
     return levels.map((lvl) => {
       const activeOrder = lvl.orders[0];
-      // Si la orden activa es SELL o el nivel tiene isHolding = true, la grilla está esperando VENTA
       const isHolding = lvl.isHolding || (activeOrder ? activeOrder.side === 'SELL' : false);
 
       return {
