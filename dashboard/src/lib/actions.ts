@@ -17,6 +17,10 @@ export interface DashboardStats {
   btcBalance: number;
   usdtBalance: number;
   gridInvestmentUsd: number;
+  lifetimeAllocationUsd: number;
+  maxLifetimeAllocationUsd: number;
+  autoInjectCooldownDays: number;
+  lastInjectionDate: string | null;
 }
 
 export interface SystemAgeInfo {
@@ -40,8 +44,20 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     const configRecord = await prisma.botConfig.findUnique({
       where: { key: 'GRID_INVESTMENT' },
     });
+    const lifetimeRecord = await prisma.botConfig.findUnique({
+      where: { key: 'LIFETIME_ALLOCATION_USD' },
+    });
+    const lastInjectionRecord = await prisma.botConfig.findUnique({
+      where: { key: 'LAST_INJECTION_TIMESTAMP' },
+    });
+
     const currentInvestmentVal = configRecord ? configRecord.value : process.env.GRID_INVESTMENT || '1000.00';
     const initialInvestment = new Decimal(currentInvestmentVal);
+    const lifetimeAllocationVal = lifetimeRecord ? lifetimeRecord.value : currentInvestmentVal;
+    const lifetimeAllocation = new Decimal(lifetimeAllocationVal);
+
+    const maxLifetimeAllocationVal = process.env.MAX_LIFETIME_ALLOCATION_USD || '10000.00';
+    const cooldownDaysVal = parseInt(process.env.AUTO_INJECT_COOLDOWN_DAYS || '20', 10);
 
     const filledOrders = await prisma.order.findMany({
       where: { status: 'FILLED' },
@@ -123,6 +139,10 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       btcBalance: Number(btcBalance.toFixed(4)),
       usdtBalance: Number(usdtBalance.toFixed(2)),
       gridInvestmentUsd: initialInvestment.toNumber(),
+      lifetimeAllocationUsd: lifetimeAllocation.toNumber(),
+      maxLifetimeAllocationUsd: parseFloat(maxLifetimeAllocationVal),
+      autoInjectCooldownDays: cooldownDaysVal,
+      lastInjectionDate: lastInjectionRecord ? lastInjectionRecord.value : null,
     };
   } catch (err) {
     console.error('Error fetching dashboard stats:', err);
@@ -140,6 +160,10 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       btcBalance: 0,
       usdtBalance: 1000,
       gridInvestmentUsd: 1000,
+      lifetimeAllocationUsd: 1000,
+      maxLifetimeAllocationUsd: 10000,
+      autoInjectCooldownDays: 20,
+      lastInjectionDate: null,
     };
   }
 }

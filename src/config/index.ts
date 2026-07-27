@@ -41,6 +41,21 @@ export const EnvSchema = z.object({
     .default('2000.00'),
   MAX_OPEN_ORDERS: z.coerce.number().int().default(20),
 
+  // Firewall de Capital Autónomo y Alerta de Sed (Binance Simple Earn Flexible)
+  STARVATION_THRESHOLD_USD: z
+    .string()
+    .transform((val) => new Decimal(val))
+    .default('150.00'),
+  AUTO_INJECT_COOLDOWN_DAYS: z.coerce.number().int().default(20),
+  AUTO_INJECT_AMOUNT_USD: z
+    .string()
+    .transform((val) => new Decimal(val))
+    .default('1000.00'),
+  MAX_LIFETIME_ALLOCATION_USD: z
+    .string()
+    .transform((val) => new Decimal(val))
+    .default('10000.00'),
+
   // Base de Datos PostgreSQL
   DATABASE_URL: z.string().url(),
 

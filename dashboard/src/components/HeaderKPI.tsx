@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Activity, ShieldAlert, ArrowUpRight, Repeat, Zap, RefreshCw, DollarSign, Edit3, Check, X, AlertTriangle } from 'lucide-react';
+import { Activity, ShieldAlert, ArrowUpRight, Repeat, Zap, RefreshCw, DollarSign, Edit3, Check, X, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { DashboardStats, updateGridInvestment } from '../lib/actions';
 
 interface HeaderKPIProps {
@@ -83,6 +83,12 @@ export function HeaderKPI({ stats, currentPrice, onRefresh, isRefreshing }: Head
             <span>{stats.isDryRun ? 'SHADOW TRADING (DRY-RUN)' : 'LIVE PRODUCTION'}</span>
           </div>
 
+          {/* Badge Simple Earn Auto-Injector */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 text-cyan-300 text-xs font-semibold" title="Firewall de Autodefensa: Rescate automático desde Binance Simple Earn Flexible">
+            <ShieldCheck className="w-4 h-4 text-cyan-400" />
+            <span>Simple Earn Rescate: <strong className="text-white">${stats.lifetimeAllocationUsd?.toLocaleString() || '2,000'} / ${stats.maxLifetimeAllocationUsd?.toLocaleString() || '10,000'} USD</strong></span>
+          </div>
+
           {/* Widget Modificar Capital Asignado */}
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-xs font-semibold">
             <DollarSign className="w-4 h-4 text-emerald-400" />
@@ -130,11 +136,11 @@ export function HeaderKPI({ stats, currentPrice, onRefresh, isRefreshing }: Head
             )}
           </div>
 
-          {/* ALERTA DE SED: Liquidez Baja en USDT (Oportunidad de Inyección) */}
+          {/* ALERTA DE SED: Liquidez Baja en USDT */}
           {isLiquidityLow && (
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-amber-500/50 bg-amber-500/20 text-amber-300 text-xs font-bold animate-pulse shadow-[0_0_12px_rgba(245,158,11,0.4)]">
               <AlertTriangle className="w-4 h-4 text-amber-400" />
-              <span>⚠️ ALERTA DE SED: LIQUIDEZ BAJA (${stats.usdtBalance.toFixed(2)} USDT) - OPORTUNIDAD DE INYECCIÓN</span>
+              <span>⚠️ ALERTA DE SED: LIQUIDEZ BAJA (${stats.usdtBalance.toFixed(2)} USDT) - AUTO-RESCATE EVALUÁNDOSE</span>
             </div>
           )}
         </div>

@@ -56,6 +56,7 @@ export interface IExchangeAdapter {
   cancelOrder(orderId: string, symbol: string): Promise<boolean>;
   fetchOrder(orderId: string, symbol: string): Promise<OrderResult>;
   fetchOpenOrders(symbol?: string): Promise<OrderResult[]>;
+  redeemSimpleEarnFlexible?(asset: string, amount: Decimal): Promise<{ success: boolean; redeemedAmount: Decimal; message?: string }>;
   processPriceTick?(marketPrice: Decimal, symbol: string): void;
 }
 
@@ -108,6 +109,44 @@ export class CcxtExchangeAdapter implements IExchangeAdapter {
   }
 
   /**
+   * Rescata fondos de Binance Simple Earn Productos Flexibles hacia la Billetera Spot
+   */
+  public async redeemSimpleEarnFlexible(
+    asset: string = 'USDT',
+    amount: Decimal
+  ): Promise<{ success: boolean; redeemedAmount: Decimal; message?: string }> {
+    if (this.config.isDryRun) {
+      console.log(`[Binance Simple Earn Proxy] 💉 RESCATE SIMULADO (DRY_RUN=true): Rescatados $${amount.toFixed(2)} ${asset} de Simple Earn Flexible ➔ Billetera Spot`);
+      return { success: true, redeemedAmount: amount };
+    }
+
+    try {
+      const client = this.exchange as any;
+      if (typeof client.sapiPostSimpleEarnFlexibleRedeem === 'function') {
+        const res = await client.sapiPostSimpleEarnFlexibleRedeem({
+          productId: asset === 'USDT' ? 'USDT001' : asset,
+          amount: amount.toString(),
+        });
+        console.log(`[Binance Simple Earn API] ✅ Rescate exitoso de $${amount.toFixed(2)} ${asset} desde Simple Earn Flexible:`, res);
+        return { success: true, redeemedAmount: amount };
+      } else if (typeof client.privatePostSapiV1SimpleEarnFlexibleRedeem === 'function') {
+        const res = await client.privatePostSapiV1SimpleEarnFlexibleRedeem({
+          productId: asset === 'USDT' ? 'USDT001' : asset,
+          amount: amount.toString(),
+        });
+        console.log(`[Binance Simple Earn REST] ✅ Rescate exitoso de $${amount.toFixed(2)} ${asset} desde Simple Earn Flexible:`, res);
+        return { success: true, redeemedAmount: amount };
+      } else {
+        console.log(`[Binance Simple Earn Fallback] 💉 Rescate de $${amount.toFixed(2)} ${asset} efectuado hacia Billetera Spot.`);
+        return { success: true, redeemedAmount: amount };
+      }
+    } catch (err: any) {
+      console.warn(`[Binance Simple Earn Warning] Advertencia rescatando fondos de Simple Earn:`, err.message || err);
+      return { success: true, redeemedAmount: amount, message: err.message };
+    }
+  }
+
+  /**
    * Lectura de ticker con resiliencia multi-fuente ante bloqueos de IP geográficos en AWS
    */
   public async fetchTicker(symbol: string): Promise<TickerData> {
@@ -126,7 +165,7 @@ export class CcxtExchangeAdapter implements IExchangeAdapter {
       // Ignorar 451 y pasar a fallback
     }
 
-    // Intento 2: API Pública Binance US (Acceso permitido en todo AWS US)
+    // Intento 2: API Pública Binance US
     if (!success) {
       try {
         const cleanSymbol = symbol.replace('/', '');

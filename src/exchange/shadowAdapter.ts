@@ -99,6 +99,14 @@ export class ShadowExchangeAdapter extends EventEmitter implements IExchangeAdap
     return Array.from(this.openOrders.values()).filter((o) => o.status === 'open');
   }
 
+  public async redeemSimpleEarnFlexible(
+    asset: string = 'USDT',
+    amount: Decimal
+  ): Promise<{ success: boolean; redeemedAmount: Decimal; message?: string }> {
+    console.log(`[Shadow Adapter] 💉 RESCATE SIMULADO: Rescatados $${amount.toFixed(2)} ${asset} de Simple Earn Flexible ➔ Billetera Spot`);
+    return { success: true, redeemedAmount: amount };
+  }
+
   /**
    * Procesa cada tick de precio en vivo de Binance y dispara ejecuciones simuladas de órdenes límite
    */

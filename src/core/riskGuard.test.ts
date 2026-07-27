@@ -98,4 +98,56 @@ describe('RiskGuard - Risk Management & Maker Enforcement Tests', () => {
     expect(result.valid).toBe(false);
     expect(result.reason).toContain('Blindaje de Capital');
   });
+
+  describe('Firewall de Autodefensa de Capital (Alerta de Sed - Reglas A, B y C)', () => {
+    const riskGuard = new RiskGuard();
+
+    it('Regla A: debe aprobar inyección si disponible < $150 USDT y transcurrieron 20+ días', () => {
+      const res = riskGuard.validateAutoInjection({
+        currentUsdtCash: 120, // Saldo < $150
+        lastInjectionTimestamp: new Date(Date.now() - 21 * 24 * 3600 * 1000), // Hace 21 días
+        currentLifetimeAllocationUsd: 2000,
+        maxLifetimeAllocationUsd: 10000,
+        autoInjectAmountUsd: 1000,
+      });
+
+      expect(res.valid).toBe(true);
+    });
+
+    it('Regla A: debe rechazar inyección si disponible >= $150 USDT y no hay error de fondos', () => {
+      const res = riskGuard.validateAutoInjection({
+        currentUsdtCash: 500, // Saldo > $150
+        isInsufficientFunds: false,
+        currentLifetimeAllocationUsd: 2000,
+      });
+
+      expect(res.valid).toBe(false);
+      expect(res.reason).toContain('Regla A');
+    });
+
+    it('Regla B: debe rechazar inyección si transcurrieron menos de 20 días desde la última inyección', () => {
+      const res = riskGuard.validateAutoInjection({
+        currentUsdtCash: 50,
+        lastInjectionTimestamp: new Date(Date.now() - 5 * 24 * 3600 * 1000), // Hace 5 días (faltan 15)
+        autoInjectCooldownDays: 20,
+        currentLifetimeAllocationUsd: 2000,
+      });
+
+      expect(res.valid).toBe(false);
+      expect(res.reason).toContain('Regla B (Cooldown Estricto)');
+    });
+
+    it('Regla C: debe rechazar inyección si la inyección proyectada superaría el techo patrimonial (MAX_LIFETIME_ALLOCATION_USD)', () => {
+      const res = riskGuard.validateAutoInjection({
+        currentUsdtCash: 50,
+        lastInjectionTimestamp: null,
+        currentLifetimeAllocationUsd: 9500,
+        autoInjectAmountUsd: 1000,
+        maxLifetimeAllocationUsd: 10000, // 9500 + 1000 = 10500 > 10000
+      });
+
+      expect(res.valid).toBe(false);
+      expect(res.reason).toContain('Regla C (Techo Patrimonial Inviolable)');
+    });
+  });
 });

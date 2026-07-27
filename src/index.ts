@@ -108,6 +108,59 @@ async function main() {
   const volatilityEngine = new LiveVolatilityEngine(25, 4);
   const matchingEngine = new LocalMatchingEngine(repository, systemBus);
 
+  // Helper de Autodefensa y Rescate Autónomo desde Binance Simple Earn Flexible
+  const checkAndExecuteAutoInjection = async (isInsufficientFunds: boolean = false): Promise<boolean> => {
+    try {
+      const currentInvestmentStr = (await repository.getBotConfig('GRID_INVESTMENT')) || env.GRID_INVESTMENT.toString();
+      const currentLifetimeAllocationStr = (await repository.getBotConfig('LIFETIME_ALLOCATION_USD')) || currentInvestmentStr;
+      const lastInjectionStr = await repository.getBotConfig('LAST_INJECTION_TIMESTAMP');
+
+      const currentInvestment = new Decimal(currentInvestmentStr);
+      const currentLifetimeAllocation = new Decimal(currentLifetimeAllocationStr);
+
+      const allLevels = await repository.getAllGridLevels();
+      const btcHoldingCount = allLevels.filter((g) => g.isHolding).length;
+      const estUsdtCash = Decimal.max(0, currentInvestment.minus(btcHoldingCount * 0.0011 * 64000));
+
+      const validation = riskGuard.validateAutoInjection({
+        currentUsdtCash: estUsdtCash,
+        isInsufficientFunds,
+        starvationThresholdUsd: env.STARVATION_THRESHOLD_USD,
+        lastInjectionTimestamp: lastInjectionStr,
+        autoInjectCooldownDays: env.AUTO_INJECT_COOLDOWN_DAYS,
+        currentLifetimeAllocationUsd: currentLifetimeAllocation,
+        autoInjectAmountUsd: env.AUTO_INJECT_AMOUNT_USD,
+        maxLifetimeAllocationUsd: env.MAX_LIFETIME_ALLOCATION_USD,
+      });
+
+      if (validation.valid) {
+        console.log(`[Auto-Injector] 💉 ALERTA DE SED: Rescatando $${env.AUTO_INJECT_AMOUNT_USD.toFixed(2)} USDT de Binance Simple Earn Flexible...`);
+
+        if (exchangeAdapter.redeemSimpleEarnFlexible) {
+          const result = await exchangeAdapter.redeemSimpleEarnFlexible('USDT', env.AUTO_INJECT_AMOUNT_USD);
+
+          if (result.success) {
+            const newInvestment = currentInvestment.plus(env.AUTO_INJECT_AMOUNT_USD);
+            const newLifetimeAllocation = currentLifetimeAllocation.plus(env.AUTO_INJECT_AMOUNT_USD);
+            const nowIso = new Date().toISOString();
+
+            await repository.setBotConfig('GRID_INVESTMENT', newInvestment.toString());
+            await repository.setBotConfig('LIFETIME_ALLOCATION_USD', newLifetimeAllocation.toString());
+            await repository.setBotConfig('LAST_INJECTION_TIMESTAMP', nowIso);
+
+            console.log(
+              `[Auto-Injector] ✅ RESCATE COMPLETADO: $${env.AUTO_INJECT_AMOUNT_USD.toFixed(2)} USDT transferidos desde Simple Earn Flexible ➔ Spot. Nuevo capital grilla: $${newInvestment.toFixed(2)} USD | Total asignado acumulado: $${newLifetimeAllocation.toFixed(2)} / $${env.MAX_LIFETIME_ALLOCATION_USD.toFixed(2)} USD | Cooldown ${env.AUTO_INJECT_COOLDOWN_DAYS} días activado.\n`
+            );
+            return true;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[Auto-Injector Error] Error evaluando inyección autónoma:', err);
+    }
+    return false;
+  };
+
   // Si DRY_RUN === false (Ejecución real en Binance Spot), conectar WebSocket privado watchOrders()
   let exchangeStreams: IExchangeStreams | null = null;
   if (!env.DRY_RUN && env.EXCHANGE_API_KEY && env.EXCHANGE_API_SECRET) {
@@ -265,17 +318,24 @@ async function main() {
 
   await volatilityEngine.start(symbol, env.ATR_TIMEFRAME, env.ATR_PERIOD);
 
-  // 10. Bucle de Tickers de Mercado en Vivo
+  // 10. Bucle de Tickers de Mercado en Vivo con Monitoreo Periódico de Autodefensa (Alerta de Sed)
   console.log('====================================================');
-  console.log('🟢 BOT OPERANDO EN TIEMPO REAL');
+  console.log('🟢 BOT OPERANDO EN TIEMPO REAL CON FIREWALL DE AUTODEFENSA');
   console.log('====================================================');
 
+  let tickCount = 0;
   const tickerInterval = setInterval(async () => {
     try {
       const ticker = await exchangeAdapter.fetchTicker(symbol);
+      tickCount++;
 
       if (env.DRY_RUN) {
         await matchingEngine.processLivePrice(ticker.last);
+      }
+
+      // Evaluar Autodefensa de Liquidez (Alerta de Sed) cada 30 ticks (~60 segundos)
+      if (tickCount % 30 === 0) {
+        await checkAndExecuteAutoInjection(false);
       }
 
       const isOutOfBounds = ticker.last.lessThan(gridManager.getConfig().lowerPrice) || ticker.last.greaterThan(gridManager.getConfig().upperPrice);
