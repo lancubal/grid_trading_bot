@@ -21,6 +21,12 @@ export interface BacktestOptions {
   enableAtrVolatility?: boolean;
   atrPeriod?: number;
   atrMultiplier?: number;
+
+  // Estrategia de Inyección Condicional por "Alerta de Sed"
+  enableConditionalInjections?: boolean;
+  injectionAmountUsd?: number; // Ej. $2,000 USD por inyección
+  starvationThresholdUsd?: number; // Ej. $150 USDT de saldo disponible
+  maxMonthlyInjectionsUsd?: number; // Ej. Máximo $2,000 USD por mes
 }
 
 export interface BacktestResult {
@@ -37,6 +43,11 @@ export interface BacktestResult {
   trailingDownEventsCount: number;
   atrRebalanceEventsCount: number;
   insufficientFundsEventsCount: number;
+
+  // Estrategia "Alerta de Sed" (Inyecciones Condicionales)
+  conditionalInjectionsCount: number;
+  totalInjectedCapitalUsd: Decimal;
+  totalInvestedCapitalUsd: Decimal;
 
   // Métricas Financieras Realizadas
   initialInvestmentUsd: Decimal;
@@ -86,6 +97,12 @@ export class GridBacktester {
   private atrPeriod: number;
   private atrMultiplier: number;
 
+  // Opciones de Inyección por Alerta de Sed
+  private enableConditionalInjections: boolean;
+  private injectionAmountUsd: Decimal;
+  private starvationThresholdUsd: Decimal;
+  private maxMonthlyInjectionsUsd: Decimal;
+
   constructor(config: GridConfigInput, options: BacktestOptions | Decimal | number = {}) {
     this.config = { ...config };
 
@@ -99,6 +116,10 @@ export class GridBacktester {
       this.enableAtrVolatility = false;
       this.atrPeriod = 14;
       this.atrMultiplier = 4.0;
+      this.enableConditionalInjections = false;
+      this.injectionAmountUsd = new Decimal(2000);
+      this.starvationThresholdUsd = new Decimal(150);
+      this.maxMonthlyInjectionsUsd = new Decimal(2000);
     } else {
       this.makerFeeRate = new Decimal(options.makerFeePercent ?? 0.05).dividedBy(100);
       this.enableTrailingUp = options.enableTrailingUp ?? false;
@@ -109,11 +130,15 @@ export class GridBacktester {
       this.enableAtrVolatility = options.enableAtrVolatility ?? false;
       this.atrPeriod = options.atrPeriod ?? 14;
       this.atrMultiplier = options.atrMultiplier ?? 4.0;
+      this.enableConditionalInjections = options.enableConditionalInjections ?? false;
+      this.injectionAmountUsd = new Decimal(options.injectionAmountUsd ?? 2000);
+      this.starvationThresholdUsd = new Decimal(options.starvationThresholdUsd ?? 150);
+      this.maxMonthlyInjectionsUsd = new Decimal(options.maxMonthlyInjectionsUsd ?? 2000);
     }
   }
 
   /**
-   * Ejecuta la simulación de Grid Trading sobre un conjunto de velas históricas OHLCV con control estricto de saldo USDT
+   * Ejecuta la simulación de Grid Trading sobre un conjunto de velas históricas OHLCV con control estricto de saldo USDT e inyección condicional
    */
   public run(candles: OHLCV[]): BacktestResult {
     if (candles.length === 0) {
@@ -136,6 +161,10 @@ export class GridBacktester {
     let trailingDownEventsCount = 0;
     let atrRebalanceEventsCount = 0;
     let insufficientFundsEventsCount = 0;
+    let conditionalInjectionsCount = 0;
+    let totalInjectedCapitalUsd = new Decimal(0);
+    let lastInjectionTimestamp = 0;
+
     let totalGrossProfitUsd = new Decimal(0);
     let totalFeesPaidUsd = new Decimal(0);
     let stopLossLossUsd = new Decimal(0);
@@ -254,7 +283,28 @@ export class GridBacktester {
           const buyFeeUsd = buyValueUsd.times(this.makerFeeRate);
           const totalCostNeededUsd = buyValueUsd.plus(buyFeeUsd);
 
-          // CONTROL ESTRICTO DE SALDO DISPONIBLE EN USDT (Fondo estanco real de cuenta Spot)
+          // ESTRATEGIA "ALERTA DE SED": Si la liquidez cae por debajo del umbral, evaluar inyección condicional de capital
+          if (
+            this.enableConditionalInjections &&
+            availableUsdtCash.lessThan(this.starvationThresholdUsd) &&
+            availableUsdtCash.lessThan(totalCostNeededUsd)
+          ) {
+            const timeSinceLastInjectionMs = candle.timestamp - lastInjectionTimestamp;
+            const isThirtyDaysPassed = lastInjectionTimestamp === 0 || timeSinceLastInjectionMs >= 30 * 24 * 3600 * 1000;
+
+            if (isThirtyDaysPassed) {
+              availableUsdtCash = availableUsdtCash.plus(this.injectionAmountUsd);
+              totalInjectedCapitalUsd = totalInjectedCapitalUsd.plus(this.injectionAmountUsd);
+              conditionalInjectionsCount++;
+              lastInjectionTimestamp = candle.timestamp;
+
+              console.log(
+                `[Alerta de Sed Inyección] 💉 Inyección condicional de $${this.injectionAmountUsd.toFixed(2)} USD efectuada el ${new Date(candle.timestamp).toISOString().split('T')[0]} (Precio BTC: $${candle.close.toFixed(2)} USD)`
+              );
+            }
+          }
+
+          // CONTROL ESTRICTO DE SALDO DISPONIBLE EN USDT
           if (availableUsdtCash.greaterThanOrEqualTo(totalCostNeededUsd)) {
             availableUsdtCash = availableUsdtCash.minus(totalCostNeededUsd);
             totalBuyOrdersFilled++;
@@ -318,8 +368,9 @@ export class GridBacktester {
       }
     }
 
+    const totalInvestedCapitalUsd = this.config.investment.plus(totalInjectedCapitalUsd);
     const netProfitUsd = totalGrossProfitUsd.minus(totalFeesPaidUsd).minus(stopLossLossUsd);
-    const netRoiPercent = netProfitUsd.dividedBy(this.config.investment).times(100);
+    const netRoiPercent = netProfitUsd.dividedBy(totalInvestedCapitalUsd).times(100);
 
     // Métricas de Inventario Retenido y Valoración No Realizada (Floating PnL)
     let heldBtcAmount = new Decimal(0);
@@ -333,7 +384,7 @@ export class GridBacktester {
     const unrealizedFloatingPnLUsd = heldBtcMarketValueUsd.minus(heldBtcCostBasisUsd);
 
     const totalCombinedPortfolioValueUsd = availableUsdtCash.plus(heldBtcMarketValueUsd);
-    const totalCombinedRoiPercent = totalCombinedPortfolioValueUsd.minus(this.config.investment).dividedBy(this.config.investment).times(100);
+    const totalCombinedRoiPercent = totalCombinedPortfolioValueUsd.minus(totalInvestedCapitalUsd).dividedBy(totalInvestedCapitalUsd).times(100);
 
     const startDate = new Date(candles[0].timestamp);
     const endDate = new Date(candles[candles.length - 1].timestamp);
@@ -356,6 +407,9 @@ export class GridBacktester {
       trailingDownEventsCount,
       atrRebalanceEventsCount,
       insufficientFundsEventsCount,
+      conditionalInjectionsCount,
+      totalInjectedCapitalUsd,
+      totalInvestedCapitalUsd,
       initialInvestmentUsd: this.config.investment,
       finalAvailableUsdtCash: availableUsdtCash,
       totalGrossProfitUsd,

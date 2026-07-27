@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Activity, ShieldAlert, ArrowUpRight, Repeat, Zap, RefreshCw, DollarSign, Edit3, Check, X } from 'lucide-react';
+import { Activity, ShieldAlert, ArrowUpRight, Repeat, Zap, RefreshCw, DollarSign, Edit3, Check, X, AlertTriangle } from 'lucide-react';
 import { DashboardStats, updateGridInvestment } from '../lib/actions';
 
 interface HeaderKPIProps {
@@ -20,6 +20,8 @@ export function HeaderKPI({ stats, currentPrice, onRefresh, isRefreshing }: Head
   const isOutOfBounds =
     currentPrice > 0 &&
     (currentPrice < stats.minGridRange || currentPrice > stats.maxGridRange);
+
+  const isLiquidityLow = stats.usdtBalance !== undefined && stats.usdtBalance < 150;
 
   const statusLabel = isOutOfBounds
     ? 'OUT OF BOUNDS - ESPERANDO VOLATILIDAD'
@@ -127,6 +129,14 @@ export function HeaderKPI({ stats, currentPrice, onRefresh, isRefreshing }: Head
               </div>
             )}
           </div>
+
+          {/* ALERTA DE SED: Liquidez Baja en USDT (Oportunidad de Inyección) */}
+          {isLiquidityLow && (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-amber-500/50 bg-amber-500/20 text-amber-300 text-xs font-bold animate-pulse shadow-[0_0_12px_rgba(245,158,11,0.4)]">
+              <AlertTriangle className="w-4 h-4 text-amber-400" />
+              <span>⚠️ ALERTA DE SED: LIQUIDEZ BAJA (${stats.usdtBalance.toFixed(2)} USDT) - OPORTUNIDAD DE INYECCIÓN</span>
+            </div>
+          )}
         </div>
 
         {/* Botón Refrescar */}
