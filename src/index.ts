@@ -20,15 +20,21 @@ async function main() {
   console.log('====================================================');
 
   const env = loadEnvConfig();
+
+  // Consultar si existe un capital dinámico configurado en la BD
+  const repository = new StateRepository();
+  const dbInvestment = await repository.getBotConfig('GRID_INVESTMENT');
   const rawGridConfig = getGridConfigFromEnv(env);
+
+  if (dbInvestment) {
+    console.log(`[Config DB] 💰 Capital de grilla configurado dinámicamente: $${dbInvestment} USD`);
+    rawGridConfig.investment = new Decimal(dbInvestment);
+  }
 
   console.log(`[Config] Entorno: ${env.NODE_ENV} | Modo DRY_RUN (Shadow Trading): ${env.DRY_RUN}`);
   console.log(`[Config ATR] Período: ${env.ATR_PERIOD} | Timeframe: ${env.ATR_TIMEFRAME} | Rango: $${env.MIN_GRID_RANGE_USD} - $${env.MAX_GRID_RANGE_USD} USD`);
 
   const systemBus = new EventEmitter();
-
-  // 1. Inicializar Repositorio de Estado DB
-  const repository = new StateRepository();
 
   // 2. Configurar Adaptador Proxy de Exchange (Lectura Mercado Real + Interceptor Condicional de Órdenes)
   const exchangeConfig = {
@@ -97,9 +103,9 @@ async function main() {
 
   console.log(`[Grid Bounds] Piso: $${adjustedGrid.newLowerPrice.toFixed(2)} | Techo: $${adjustedGrid.newUpperPrice.toFixed(2)} | Escalón: $${adjustedGrid.stepSize.toFixed(2)}`);
 
-  // 6. Inicializar Guardián de Riesgo, Motor de Volatilidad y Matching Engine Local
-  const riskGuard = new RiskGuard(env.MAX_ORDER_VALUE_USD, env.MAX_OPEN_ORDERS);
-  const volatilityEngine = new LiveVolatilityEngine(15);
+  // 6. Inicializar Guardián de Riesgo, Motor de Volatilidad (25% umbral, 4h cooldown) y Matching Engine Local
+  const riskGuard = new RiskGuard(env.MAX_ORDER_VALUE_USD, env.MAX_OPEN_ORDERS, env.MAX_GRID_ALLOCATION_USD);
+  const volatilityEngine = new LiveVolatilityEngine(25, 4);
   const matchingEngine = new LocalMatchingEngine(repository, systemBus);
 
   // Si DRY_RUN === false (Ejecución real en Binance Spot), conectar WebSocket privado watchOrders()
@@ -203,11 +209,26 @@ async function main() {
     }
   }
 
-  // 9. Reacción al Evento VOLATILITY_CHANGE: Cancelar órdenes virtuales y re-dibujar 15 escalones
+  // 9. Reacción al Evento VOLATILITY_CHANGE: Cancelar órdenes virtuales y re-dibujar 15 escalones con Inventory Cost Guard
   volatilityEngine.on('VOLATILITY_CHANGE', async (newAtr: Decimal) => {
     console.log(`\n[Rebalance Trigger] ⚡ Evento VOLATILITY_CHANGE Recibido (Nuevo ATR: $${newAtr.toFixed(2)} USD). Re-ajustando grilla...`);
 
     const latestTicker = await exchangeAdapter.fetchTicker(symbol);
+
+    // Obtener los costos de compra del inventario retenido antes de cancelar
+    const currentOpenOrders = await repository.getOpenOrders();
+    const holdingCostBasis: Decimal[] = [];
+
+    for (const ord of currentOpenOrders) {
+      if (ord.side === OrderSide.SELL) {
+        holdingCostBasis.push(new Decimal(ord.price));
+      }
+      if (ord.exchangeId) {
+        await exchangeAdapter.cancelOrder(ord.exchangeId, symbol);
+        await repository.updateOrderStatusById(ord.id, OrderStatus.CANCELED);
+      }
+    }
+
     const rebalanced = gridManager.adjustToVolatility(
       newAtr,
       latestTicker.last,
@@ -216,15 +237,7 @@ async function main() {
       env.MAX_GRID_RANGE_USD.toNumber()
     );
 
-    const currentOpenOrders = await repository.getOpenOrders();
-    for (const ord of currentOpenOrders) {
-      if (ord.exchangeId) {
-        await exchangeAdapter.cancelOrder(ord.exchangeId, symbol);
-        await repository.updateOrderStatusById(ord.id, OrderStatus.CANCELED);
-      }
-    }
-
-    const newSeedPlans = gridManager.generateSeedOrders(latestTicker.last);
+    const newSeedPlans = gridManager.generateSeedOrders(latestTicker.last, holdingCostBasis);
     for (const plan of newSeedPlans) {
       const createdOrder = await exchangeAdapter.createOrder({
         symbol,
@@ -247,7 +260,7 @@ async function main() {
       });
     }
 
-    console.log(`[Rebalance Complete] ✨ Grilla Re-ajustada: Nuevo rango $${rebalanced.newLowerPrice.toFixed(2)} - $${rebalanced.newUpperPrice.toFixed(2)} USD (${newSeedPlans.length} órdenes re-sembradas).\n`);
+    console.log(`[Rebalance Complete] ✨ Grilla Re-ajustada: Nuevo rango $${rebalanced.newLowerPrice.toFixed(2)} - $${rebalanced.newUpperPrice.toFixed(2)} USD (${newSeedPlans.length} órdenes re-sembradas con Inventory Cost Guard).\n`);
   });
 
   await volatilityEngine.start(symbol, env.ATR_TIMEFRAME, env.ATR_PERIOD);

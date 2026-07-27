@@ -59,6 +59,11 @@ interface SimulatedGridLevel {
   orderAmount: Decimal;
 }
 
+interface InventoryLot {
+  buyPrice: Decimal;
+  amount: Decimal;
+}
+
 export class GridBacktester {
   private config: GridConfigInput;
   private makerFeeRate: Decimal;
@@ -111,7 +116,7 @@ export class GridBacktester {
     let budgetPerLevel = this.config.investment.dividedBy(this.config.gridLevels - 1);
 
     const startPrice = candles[0].close;
-    let levels: SimulatedGridLevel[] = this.buildLevels(currentLower, stepSize, budgetPerLevel, startPrice);
+    let levels: SimulatedGridLevel[] = this.buildLevels(currentLower, stepSize, budgetPerLevel, startPrice, []);
 
     let totalFlipsCompleted = 0;
     let totalBuyOrdersFilled = 0;
@@ -127,6 +132,7 @@ export class GridBacktester {
     let consecutiveUpperBreaches = 0;
     let consecutiveLowerBreaches = 0;
     const windowCandles: OHLCV[] = [];
+    const inventoryStack: InventoryLot[] = [];
 
     // Simular vela por vela
     for (let i = 0; i < candles.length; i++) {
@@ -136,7 +142,6 @@ export class GridBacktester {
 
       // 1. Check Volatilidad Adaptativa por ATR (Reajuste periódico o al salirse de rango)
       if (this.enableAtrVolatility && windowCandles.length >= this.atrPeriod + 1) {
-        // Re-evaluar ancho de grilla cada 1,440 velas (24 horas) o si el precio está fuera de rango
         const isPeriodCheck = i % 1440 === 0 && i > 0;
         const isOutOfBounds = close.lessThan(currentLower) || close.greaterThan(currentUpper);
 
@@ -152,7 +157,8 @@ export class GridBacktester {
           stepSize = currentUpper.minus(currentLower).dividedBy(this.config.gridLevels - 1);
           budgetPerLevel = this.config.investment.dividedBy(this.config.gridLevels - 1);
 
-          levels = this.buildLevels(currentLower, stepSize, budgetPerLevel, close);
+          const holdingCostBasis = inventoryStack.map((lot) => lot.buyPrice);
+          levels = this.buildLevels(currentLower, stepSize, budgetPerLevel, close, holdingCostBasis);
           atrRebalanceEventsCount++;
         }
       }
@@ -170,7 +176,8 @@ export class GridBacktester {
             stepSize = currentUpper.minus(currentLower).dividedBy(this.config.gridLevels - 1);
             budgetPerLevel = this.config.investment.dividedBy(this.config.gridLevels - 1);
 
-            levels = this.buildLevels(currentLower, stepSize, budgetPerLevel, close);
+            const holdingCostBasis = inventoryStack.map((lot) => lot.buyPrice);
+            levels = this.buildLevels(currentLower, stepSize, budgetPerLevel, close, holdingCostBasis);
             trailingUpEventsCount++;
             consecutiveUpperBreaches = 0;
           }
@@ -190,11 +197,9 @@ export class GridBacktester {
             let heldBtcTotal = new Decimal(0);
             let btcCostUsd = new Decimal(0);
 
-            for (const lvl of levels) {
-              if (!lvl.hasBuyOrder) {
-                heldBtcTotal = heldBtcTotal.plus(lvl.orderAmount);
-                btcCostUsd = btcCostUsd.plus(lvl.price.times(lvl.orderAmount));
-              }
+            for (const lot of inventoryStack) {
+              heldBtcTotal = heldBtcTotal.plus(lot.amount);
+              btcCostUsd = btcCostUsd.plus(lot.buyPrice.times(lot.amount));
             }
 
             if (heldBtcTotal.greaterThan(0)) {
@@ -203,6 +208,7 @@ export class GridBacktester {
               if (lossUsd.greaterThan(0)) {
                 stopLossLossUsd = stopLossLossUsd.plus(lossUsd);
               }
+              inventoryStack.length = 0; // Clear inventory after stop loss
             }
 
             const totalRange = currentUpper.minus(currentLower);
@@ -213,7 +219,7 @@ export class GridBacktester {
             stepSize = currentUpper.minus(currentLower).dividedBy(this.config.gridLevels - 1);
             budgetPerLevel = this.config.investment.dividedBy(this.config.gridLevels - 1);
 
-            levels = this.buildLevels(currentLower, stepSize, budgetPerLevel, close);
+            levels = this.buildLevels(currentLower, stepSize, budgetPerLevel, close, []);
             trailingDownEventsCount++;
             consecutiveLowerBreaches = 0;
           }
@@ -237,6 +243,11 @@ export class GridBacktester {
           const buyFeeUsd = buyValueUsd.times(this.makerFeeRate);
           totalFeesPaidUsd = totalFeesPaidUsd.plus(buyFeeUsd);
 
+          inventoryStack.push({
+            buyPrice: level.price,
+            amount: level.orderAmount,
+          });
+
           const nextLevelIndex = level.levelIndex + 1;
           if (nextLevelIndex < levels.length) {
             levels[nextLevelIndex].hasSellOrder = true;
@@ -251,15 +262,31 @@ export class GridBacktester {
           const sellFeeUsd = sellValueUsd.times(this.makerFeeRate);
           totalFeesPaidUsd = totalFeesPaidUsd.plus(sellFeeUsd);
 
+          // FIFO Accounting de ganancia bruta
+          let remainingToMatch = level.orderAmount;
+          while (remainingToMatch.greaterThan(0) && inventoryStack.length > 0) {
+            const lot = inventoryStack[0];
+            const matchedAmount = Decimal.min(remainingToMatch, lot.amount);
+
+            const spreadGross = level.price.minus(lot.buyPrice).times(matchedAmount);
+            if (spreadGross.greaterThan(0)) {
+              totalGrossProfitUsd = totalGrossProfitUsd.plus(spreadGross);
+            } else {
+              stopLossLossUsd = stopLossLossUsd.plus(spreadGross.abs());
+            }
+
+            lot.amount = lot.amount.minus(matchedAmount);
+            remainingToMatch = remainingToMatch.minus(matchedAmount);
+
+            if (lot.amount.lessThanOrEqualTo(0.000001)) {
+              inventoryStack.shift();
+            }
+          }
+
+          totalFlipsCompleted++;
+
           const prevLevelIndex = level.levelIndex - 1;
           if (prevLevelIndex >= 0) {
-            const prevPrice = levels[prevLevelIndex].price;
-            const grossGainPerCoin = level.price.minus(prevPrice);
-            const cycleGrossProfit = grossGainPerCoin.times(level.orderAmount);
-
-            totalGrossProfitUsd = totalGrossProfitUsd.plus(cycleGrossProfit);
-            totalFlipsCompleted++;
-
             levels[prevLevelIndex].hasBuyOrder = true;
           }
         }
@@ -305,18 +332,33 @@ export class GridBacktester {
     lowerPrice: Decimal,
     stepSize: Decimal,
     budgetPerLevel: Decimal,
-    currentPrice: Decimal
+    currentPrice: Decimal,
+    holdingCostBasis: Decimal[]
   ): SimulatedGridLevel[] {
     const levels: SimulatedGridLevel[] = [];
+    let minAllowedSellPrice = new Decimal(0);
+    if (holdingCostBasis.length > 0) {
+      const highestCost = Decimal.max(...holdingCostBasis);
+      minAllowedSellPrice = highestCost.times(new Decimal(1.0015));
+    }
+
     for (let i = 0; i < this.config.gridLevels; i++) {
-      const price = lowerPrice.plus(stepSize.times(i));
+      let price = lowerPrice.plus(stepSize.times(i));
+
+      let hasBuy = price.lessThan(currentPrice);
+      let hasSell = price.greaterThan(currentPrice);
+
+      if (hasSell && holdingCostBasis.length > 0 && price.lessThan(minAllowedSellPrice)) {
+        price = minAllowedSellPrice;
+      }
+
       const amount = budgetPerLevel.dividedBy(price).toDecimalPlaces(6, Decimal.ROUND_DOWN);
 
       levels.push({
         levelIndex: i,
         price,
-        hasBuyOrder: price.lessThan(currentPrice),
-        hasSellOrder: price.greaterThan(currentPrice),
+        hasBuyOrder: hasBuy,
+        hasSellOrder: hasSell,
         orderAmount: amount,
       });
     }

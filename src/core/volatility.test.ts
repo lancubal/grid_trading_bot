@@ -4,7 +4,7 @@ import { LiveVolatilityEngine } from './volatility';
 
 describe('LiveVolatilityEngine - Real-Time ATR Volatility Monitoring', () => {
   it('debe emitir el evento VOLATILITY_CHANGE solo cuando el ATR varía un 15% o más', async () => {
-    const engine = new LiveVolatilityEngine(15);
+    const engine = new LiveVolatilityEngine(15, 0); // 0h cooldown for instant unit testing
     const listenerSpy = vi.fn();
     engine.on('VOLATILITY_CHANGE', listenerSpy);
 

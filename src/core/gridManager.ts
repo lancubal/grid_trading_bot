@@ -15,6 +15,7 @@ export class GridManager extends EventEmitter {
   private config: GridConfigInput;
   private levels: GridLevel[] = [];
   private stepSize: Decimal;
+  private makerFeeRate: Decimal = new Decimal(0.0005); // 0.05%
 
   constructor(config: GridConfigInput) {
     super();
@@ -103,13 +104,26 @@ export class GridManager extends EventEmitter {
   }
 
   /**
-   * Calcula el plan de siembra inicial de órdenes (Buy Limits por debajo del precio actual, Sell Limits por encima)
+   * Genera las órdenes de siembra iniciales con Guardia de Precio Mínimo de Venta (Inventory Cost Guard)
+   * @param currentMarketPrice Precio actual de mercado
+   * @param holdingCostBasis Array opcional con los precios de compra originales del inventario retenido
    */
-  public generateSeedOrders(currentMarketPrice: Decimal | number | string): SeedOrderPlan[] {
+  public generateSeedOrders(
+    currentMarketPrice: Decimal | number | string,
+    holdingCostBasis: Decimal[] = []
+  ): SeedOrderPlan[] {
     const seedOrders: SeedOrderPlan[] = [];
     const currentPriceDec = new Decimal(currentMarketPrice);
     const investmentDec = new Decimal(this.config.investment);
     const budgetPerLevel = investmentDec.dividedBy(this.config.gridLevels - 1);
+
+    // Calcular el precio mínimo de venta permitido para proteger el inventario
+    let minAllowedSellPrice = new Decimal(0);
+    if (holdingCostBasis.length > 0) {
+      const highestCost = Decimal.max(...holdingCostBasis);
+      // Mínimo de venta = costo de entrada + comisiones compra/venta (0.10%) + margen de ganancia (0.05%)
+      minAllowedSellPrice = highestCost.times(new Decimal(1.0015));
+    }
 
     for (const level of this.levels) {
       const levelPriceDec = new Decimal(level.price);
@@ -123,10 +137,19 @@ export class GridManager extends EventEmitter {
           amount: amount.toDecimalPlaces(6, Decimal.ROUND_DOWN),
         });
       } else if (levelPriceDec.greaterThan(currentPriceDec)) {
-        const amount = budgetPerLevel.dividedBy(levelPriceDec);
+        // INVENTORY COST GUARD: Proteger órdenes SELL para que nunca se ejecuten por debajo del costo de compra
+        let finalSellPrice = levelPriceDec;
+        if (holdingCostBasis.length > 0 && finalSellPrice.lessThan(minAllowedSellPrice)) {
+          console.warn(
+            `[Inventory Cost Guard] 🛡️ Orden de VENTA ajustada de $${finalSellPrice.toFixed(2)} a $${minAllowedSellPrice.toFixed(2)} USD para evitar venta a pérdida de inventario retenido.`
+          );
+          finalSellPrice = minAllowedSellPrice;
+        }
+
+        const amount = budgetPerLevel.dividedBy(finalSellPrice);
         seedOrders.push({
           levelIndex: level.levelIndex,
-          price: levelPriceDec,
+          price: finalSellPrice,
           side: 'sell',
           amount: amount.toDecimalPlaces(6, Decimal.ROUND_DOWN),
         });
@@ -146,11 +169,19 @@ export class GridManager extends EventEmitter {
     }
 
     const fillAmountDec = new Decimal(event.amount);
+    const eventPriceDec = new Decimal(event.price);
 
     if (event.side === 'buy') {
       const targetLevelIndex = event.gridLevel + 1;
       if (targetLevelIndex < this.levels.length) {
-        const targetPrice = new Decimal(this.levels[targetLevelIndex].price);
+        let targetPrice = new Decimal(this.levels[targetLevelIndex].price);
+
+        // INVENTORY COST GUARD: Asegurar que la VENTA sea mayor que la COMPRA + Comisiones
+        const minProfitPrice = eventPriceDec.times(new Decimal(1.0015));
+        if (targetPrice.lessThan(minProfitPrice)) {
+          targetPrice = minProfitPrice;
+        }
+
         const flipPlan: SeedOrderPlan = {
           levelIndex: targetLevelIndex,
           price: targetPrice,

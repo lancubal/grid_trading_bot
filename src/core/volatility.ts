@@ -7,12 +7,15 @@ import { OHLCV } from '../backtest/backtester';
 export class LiveVolatilityEngine extends EventEmitter {
   private currentActiveAtr: Decimal | null = null;
   private readonly thresholdPercent: Decimal;
+  private readonly minCooldownMs: number;
+  private lastRebalanceTime: number = 0;
   private isRunning: boolean = false;
   private intervalTimer: NodeJS.Timeout | null = null;
 
-  constructor(thresholdPercent: number = 15) {
+  constructor(thresholdPercent: number = 25, minCooldownHours: number = 4) {
     super();
     this.thresholdPercent = new Decimal(thresholdPercent);
+    this.minCooldownMs = minCooldownHours * 3600 * 1000;
   }
 
   public getCurrentAtr(): Decimal | null {
@@ -26,7 +29,7 @@ export class LiveVolatilityEngine extends EventEmitter {
     this.isRunning = true;
     const ccxtPublic = new ccxt.binance({ enableRateLimit: true });
 
-    console.log(`[Volatility Engine] 📡 Iniciado monitoreo de volatilidad en vivo para ${symbol} (${timeframe}, ATR-${period})...`);
+    console.log(`[Volatility Engine] 📡 Iniciado monitoreo de volatilidad en vivo para ${symbol} (${timeframe}, ATR-${period}, Umbral: ${this.thresholdPercent}%, Cooldown: ${this.minCooldownMs / 3600000}h)...`);
 
     // Primera evaluación inmediata
     await this.evaluateVolatility(ccxtPublic, symbol, timeframe, period);
@@ -43,7 +46,7 @@ export class LiveVolatilityEngine extends EventEmitter {
   }
 
   /**
-   * Evalúa la variación porcentual del ATR y emite VOLATILITY_CHANGE si varía >= 15%
+   * Evalúa la variación porcentual del ATR y emite VOLATILITY_CHANGE si varía >= thresholdPercent y respetando el cooldown
    */
   public async evaluateVolatility(
     ccxtClient: any,
@@ -64,7 +67,7 @@ export class LiveVolatilityEngine extends EventEmitter {
         }
       }
 
-      // Intento 2: API pública REST de Binance US (Acceso global garantizado sin bloqueo HTTP 451 en AWS US)
+      // Intento 2: API pública REST de Binance US
       if (!rawCandles || rawCandles.length === 0) {
         try {
           const res = await fetch(`https://api.binance.us/api/v3/klines?symbol=${cleanSymbol}&interval=${timeframe}&limit=${period + 10}`);
@@ -105,19 +108,22 @@ export class LiveVolatilityEngine extends EventEmitter {
 
       if (this.currentActiveAtr === null) {
         this.currentActiveAtr = newAtr;
+        this.lastRebalanceTime = Date.now();
         console.log(`[Volatility Engine] 📊 ATR Inicial registrado: $${newAtr.toFixed(2)} USD`);
         return newAtr;
       }
 
       const diffAbs = newAtr.minus(this.currentActiveAtr).abs();
       const variationPercent = diffAbs.dividedBy(this.currentActiveAtr).times(100);
+      const timeSinceLastMs = Date.now() - this.lastRebalanceTime;
 
-      if (variationPercent.greaterThanOrEqualTo(this.thresholdPercent)) {
+      if (variationPercent.greaterThanOrEqualTo(this.thresholdPercent) && timeSinceLastMs >= this.minCooldownMs) {
         console.log(
           `[Volatility Engine] 🚀 CAMBIO DE VOLATILIDAD (Variación: ${variationPercent.toFixed(2)}% >= ${this.thresholdPercent}%): ATR anterior $${this.currentActiveAtr.toFixed(2)} ➔ Nuevo ATR $${newAtr.toFixed(2)} USD`
         );
 
         this.currentActiveAtr = newAtr;
+        this.lastRebalanceTime = Date.now();
         this.emit('VOLATILITY_CHANGE', newAtr);
       }
 
