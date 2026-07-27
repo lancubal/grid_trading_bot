@@ -36,14 +36,24 @@ export interface BacktestResult {
   trailingUpEventsCount: number;
   trailingDownEventsCount: number;
   atrRebalanceEventsCount: number;
+  insufficientFundsEventsCount: number;
 
-  // Métricas Financieras
+  // Métricas Financieras Realizadas
   initialInvestmentUsd: Decimal;
+  finalAvailableUsdtCash: Decimal;
   totalGrossProfitUsd: Decimal;
   totalFeesPaidUsd: Decimal;
   stopLossLossUsd: Decimal;
   netProfitUsd: Decimal;
   netRoiPercent: Decimal;
+
+  // Inventario y Ganancia No Realizada (Floating PnL)
+  heldBtcAmount: Decimal;
+  heldBtcCostBasisUsd: Decimal;
+  heldBtcMarketValueUsd: Decimal;
+  unrealizedFloatingPnLUsd: Decimal;
+  totalCombinedPortfolioValueUsd: Decimal;
+  totalCombinedRoiPercent: Decimal;
 
   // Tiempo Fuera de Rango (Out of Bounds)
   outOfBoundsCandlesCount: number;
@@ -103,13 +113,14 @@ export class GridBacktester {
   }
 
   /**
-   * Ejecuta la simulación de Grid Trading sobre un conjunto de velas históricas OHLCV
+   * Ejecuta la simulación de Grid Trading sobre un conjunto de velas históricas OHLCV con control estricto de saldo USDT
    */
   public run(candles: OHLCV[]): BacktestResult {
     if (candles.length === 0) {
       throw new Error('[Backtester Error] No se provieron velas históricas para la simulación.');
     }
 
+    let availableUsdtCash = new Decimal(this.config.investment);
     let currentLower = new Decimal(this.config.lowerPrice);
     let currentUpper = new Decimal(this.config.upperPrice);
     let stepSize = currentUpper.minus(currentLower).dividedBy(this.config.gridLevels - 1);
@@ -124,6 +135,7 @@ export class GridBacktester {
     let trailingUpEventsCount = 0;
     let trailingDownEventsCount = 0;
     let atrRebalanceEventsCount = 0;
+    let insufficientFundsEventsCount = 0;
     let totalGrossProfitUsd = new Decimal(0);
     let totalFeesPaidUsd = new Decimal(0);
     let stopLossLossUsd = new Decimal(0);
@@ -208,6 +220,8 @@ export class GridBacktester {
               if (lossUsd.greaterThan(0)) {
                 stopLossLossUsd = stopLossLossUsd.plus(lossUsd);
               }
+              // Devolver fondos liquidados al disponible USDT
+              availableUsdtCash = availableUsdtCash.plus(liquidatedValueUsd);
               inventoryStack.length = 0; // Clear inventory after stop loss
             }
 
@@ -236,30 +250,41 @@ export class GridBacktester {
       // Evaluar ejecuciones en los niveles de la grilla
       for (const level of levels) {
         if (level.hasBuyOrder && low.lessThanOrEqualTo(level.price)) {
-          totalBuyOrdersFilled++;
-          level.hasBuyOrder = false;
-
           const buyValueUsd = level.price.times(level.orderAmount);
           const buyFeeUsd = buyValueUsd.times(this.makerFeeRate);
-          totalFeesPaidUsd = totalFeesPaidUsd.plus(buyFeeUsd);
+          const totalCostNeededUsd = buyValueUsd.plus(buyFeeUsd);
 
-          inventoryStack.push({
-            buyPrice: level.price,
-            amount: level.orderAmount,
-          });
+          // CONTROL ESTRICTO DE SALDO DISPONIBLE EN USDT (Fondo estanco real de cuenta Spot)
+          if (availableUsdtCash.greaterThanOrEqualTo(totalCostNeededUsd)) {
+            availableUsdtCash = availableUsdtCash.minus(totalCostNeededUsd);
+            totalBuyOrdersFilled++;
+            level.hasBuyOrder = false;
+            totalFeesPaidUsd = totalFeesPaidUsd.plus(buyFeeUsd);
 
-          const nextLevelIndex = level.levelIndex + 1;
-          if (nextLevelIndex < levels.length) {
-            levels[nextLevelIndex].hasSellOrder = true;
+            inventoryStack.push({
+              buyPrice: level.price,
+              amount: level.orderAmount,
+            });
+
+            const nextLevelIndex = level.levelIndex + 1;
+            if (nextLevelIndex < levels.length) {
+              levels[nextLevelIndex].hasSellOrder = true;
+            }
+          } else {
+            // FONDOS INSUFICIENTES: Binance rechaza la orden ("Insufficient Funds")
+            insufficientFundsEventsCount++;
           }
         }
 
         if (level.hasSellOrder && high.greaterThanOrEqualTo(level.price)) {
-          totalSellOrdersFilled++;
-          level.hasSellOrder = false;
-
           const sellValueUsd = level.price.times(level.orderAmount);
           const sellFeeUsd = sellValueUsd.times(this.makerFeeRate);
+          const netUsdtReturnedUsd = sellValueUsd.minus(sellFeeUsd);
+
+          // Devolver el efectivo USDT cobrado por la venta al saldo disponible
+          availableUsdtCash = availableUsdtCash.plus(netUsdtReturnedUsd);
+          totalSellOrdersFilled++;
+          level.hasSellOrder = false;
           totalFeesPaidUsd = totalFeesPaidUsd.plus(sellFeeUsd);
 
           // FIFO Accounting de ganancia bruta
@@ -296,6 +321,20 @@ export class GridBacktester {
     const netProfitUsd = totalGrossProfitUsd.minus(totalFeesPaidUsd).minus(stopLossLossUsd);
     const netRoiPercent = netProfitUsd.dividedBy(this.config.investment).times(100);
 
+    // Métricas de Inventario Retenido y Valoración No Realizada (Floating PnL)
+    let heldBtcAmount = new Decimal(0);
+    let heldBtcCostBasisUsd = new Decimal(0);
+    for (const lot of inventoryStack) {
+      heldBtcAmount = heldBtcAmount.plus(lot.amount);
+      heldBtcCostBasisUsd = heldBtcCostBasisUsd.plus(lot.buyPrice.times(lot.amount));
+    }
+    const endPrice = candles[candles.length - 1].close;
+    const heldBtcMarketValueUsd = heldBtcAmount.times(endPrice);
+    const unrealizedFloatingPnLUsd = heldBtcMarketValueUsd.minus(heldBtcCostBasisUsd);
+
+    const totalCombinedPortfolioValueUsd = availableUsdtCash.plus(heldBtcMarketValueUsd);
+    const totalCombinedRoiPercent = totalCombinedPortfolioValueUsd.minus(this.config.investment).dividedBy(this.config.investment).times(100);
+
     const startDate = new Date(candles[0].timestamp);
     const endDate = new Date(candles[candles.length - 1].timestamp);
     const durationHours = (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60);
@@ -316,12 +355,20 @@ export class GridBacktester {
       trailingUpEventsCount,
       trailingDownEventsCount,
       atrRebalanceEventsCount,
+      insufficientFundsEventsCount,
       initialInvestmentUsd: this.config.investment,
+      finalAvailableUsdtCash: availableUsdtCash,
       totalGrossProfitUsd,
       totalFeesPaidUsd,
       stopLossLossUsd,
       netProfitUsd,
       netRoiPercent,
+      heldBtcAmount,
+      heldBtcCostBasisUsd,
+      heldBtcMarketValueUsd,
+      unrealizedFloatingPnLUsd,
+      totalCombinedPortfolioValueUsd,
+      totalCombinedRoiPercent,
       outOfBoundsCandlesCount,
       outOfBoundsHours: parseFloat(outOfBoundsHours.toFixed(2)),
       outOfBoundsPercent,
