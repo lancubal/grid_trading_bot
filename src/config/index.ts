@@ -6,7 +6,7 @@ export const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().default(3000),
 
-  // Modo de Ejecución (Shadow Trading / Dry Run)
+  // Modo de Ejecución (Shadow Trading / Dry-Run vs Producción Real)
   DRY_RUN: z
     .string()
     .transform((val) => val.toLowerCase() === 'true')
@@ -30,18 +30,18 @@ export const EnvSchema = z.object({
     .transform((val) => new Decimal(val))
     .default('6000.00'),
 
-  // Parámetros de Riesgo y Blindaje de Capital
+  // Parámetros de Riesgo y Blindaje de Capital (Adaptativos según capital grilla)
   MAX_ORDER_VALUE_USD: z
     .string()
     .transform((val) => new Decimal(val))
-    .default('150.00'),
+    .default('1000.00'),
   MAX_GRID_ALLOCATION_USD: z
     .string()
     .transform((val) => new Decimal(val))
-    .default('2000.00'),
+    .default('10000.00'),
   MAX_OPEN_ORDERS: z.coerce.number().int().default(20),
 
-  // Firewall de Capital Autónomo y Alerta de Sed (Binance Simple Earn Flexible)
+  // Firewall de Autodefensa de Capital y Alerta de Sed (Binance Simple Earn Flexible)
   STARVATION_THRESHOLD_USD: z
     .string()
     .transform((val) => new Decimal(val))
