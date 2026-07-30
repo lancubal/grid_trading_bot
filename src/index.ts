@@ -173,6 +173,7 @@ async function main() {
       const estUsdtCash = Decimal.max(0, currentInvestment.minus(btcHoldingCount * 0.0011 * 64000));
 
       const validation = riskGuard.validateAutoInjection({
+        enabled: env.ENABLE_AUTO_INJECT,
         currentUsdtCash: estUsdtCash,
         isInsufficientFunds,
         starvationThresholdUsd: env.STARVATION_THRESHOLD_USD,

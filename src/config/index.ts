@@ -18,7 +18,7 @@ export const EnvSchema = z.object({
   GRID_INVESTMENT: z
     .string()
     .transform((val) => new Decimal(val))
-    .default('1000.00'),
+    .default('2000.00'),
   ATR_PERIOD: z.coerce.number().int().min(2).max(100).default(14),
   ATR_TIMEFRAME: z.string().default('1h'),
   MIN_GRID_RANGE_USD: z
@@ -50,6 +50,10 @@ export const EnvSchema = z.object({
   MAX_OPEN_ORDERS: z.coerce.number().int().default(20),
 
   // Firewall de Autodefensa de Capital y Alerta de Sed (Binance Simple Earn Flexible)
+  ENABLE_AUTO_INJECT: z
+    .string()
+    .transform((val) => val.toLowerCase() === 'true')
+    .default('false'), // Por defecto deshabilitado el primer mes
   STARVATION_THRESHOLD_USD: z
     .string()
     .transform((val) => new Decimal(val))
@@ -62,7 +66,7 @@ export const EnvSchema = z.object({
   MAX_LIFETIME_ALLOCATION_USD: z
     .string()
     .transform((val) => new Decimal(val))
-    .default('10000.00'),
+    .default('2000.00'),
 
   // Alertas y Observabilidad (Slack Notifications & Kill-Switch)
   ENABLE_NOTIFICATIONS: z

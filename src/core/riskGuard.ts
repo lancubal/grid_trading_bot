@@ -2,6 +2,7 @@ import Decimal from 'decimal.js';
 import { OrderRequest } from '../exchange/adapter';
 
 export interface AutoInjectionValidationParams {
+  enabled?: boolean;
   currentUsdtCash: Decimal | number;
   isInsufficientFunds?: boolean;
   starvationThresholdUsd?: Decimal | number;
@@ -92,6 +93,13 @@ export class RiskGuard {
    * - Regla C: Techo Patrimonial Inviolable (Bloqueo si el capital acumulado supera MAX_LIFETIME_ALLOCATION_USD)
    */
   public validateAutoInjection(params: AutoInjectionValidationParams): { valid: boolean; reason?: string } {
+    if (params.enabled === false) {
+      return {
+        valid: false,
+        reason: 'Inyección automática desactivada por configuración (ENABLE_AUTO_INJECT=false). El bot solo operará con el capital inicial.',
+      };
+    }
+
     const starvationThreshold = new Decimal(params.starvationThresholdUsd ?? 150);
     const cooldownDays = params.autoInjectCooldownDays ?? 20;
     const injectAmount = new Decimal(params.autoInjectAmountUsd ?? 1000);
