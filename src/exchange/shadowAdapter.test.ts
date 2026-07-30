@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import Decimal from 'decimal.js';
 import { ShadowExchangeAdapter } from './shadowAdapter';
-import { isInsufficientFundsError } from './adapter';
+import { isInsufficientFundsError, executeWithRetry } from './adapter';
 
 describe('ShadowExchangeAdapter - Real-Time Shadow Trading Simulation', () => {
   const config = {
@@ -60,5 +60,20 @@ describe('ShadowExchangeAdapter - Real-Time Shadow Trading Simulation', () => {
 
     const genericError = new Error('Network timeout');
     expect(isInsufficientFundsError(genericError)).toBe(false);
+  });
+
+  it('debe reintentar llamadas asíncronas con Exponential Backoff ante errores 502/504 o timeout', async () => {
+    let calls = 0;
+    const mockApiCall = async () => {
+      calls++;
+      if (calls < 3) {
+        throw new Error('HTTP 502 Bad Gateway Timeout');
+      }
+      return 'SUCCESS';
+    };
+
+    const res = await executeWithRetry(mockApiCall, 3, 10, 'TestCall');
+    expect(res).toBe('SUCCESS');
+    expect(calls).toBe(3);
   });
 });

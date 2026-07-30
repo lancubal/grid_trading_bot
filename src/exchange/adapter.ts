@@ -61,8 +61,8 @@ export interface IExchangeAdapter {
 }
 
 /**
-  * Identifica específicamente si un error retornado por Binance/CCXT corresponde a "Insufficient Funds" (Código Binance -2010)
-  */
+ * Identifica específicamente si un error retornado por Binance/CCXT corresponde a "Insufficient Funds" (Código Binance -2010)
+ */
 export function isInsufficientFundsError(err: any): boolean {
   if (!err) return false;
   if (typeof ccxt !== 'undefined' && ccxt.InsufficientFunds && err instanceof ccxt.InsufficientFunds) {
@@ -80,8 +80,64 @@ export function isInsufficientFundsError(err: any): boolean {
 }
 
 /**
-  * Adaptador de Exchange con Interceptor Condicional de Órdenes y Resiliencia Geográfica (AWS / Cloud).
-  */
+ * Ejecuta una llamada asíncrona a la API del Exchange con reintentos exponenciales (Exponential Backoff)
+ * diseñado para sobrevivir a colapsos de red, latencias y errores HTTP 500, 502, 503, 504 o Timeouts durante Flash Crashes.
+ */
+export async function executeWithRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 3,
+  initialDelayMs: number = 500,
+  contextLabel: string = 'Exchange API'
+): Promise<T> {
+  let attempt = 0;
+  let delay = initialDelayMs;
+
+  while (attempt < maxRetries) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      attempt++;
+      if (isInsufficientFundsError(err)) {
+        // No reintentar si es error de saldo insuficiente
+        throw err;
+      }
+
+      const errMsg = (err.message || err.toString() || '').toLowerCase();
+      const errName = String(err.name || err.constructor?.name || '');
+      const isNetworkOrTimeout =
+        errName.includes('Timeout') ||
+        errName.includes('NotAvailable') ||
+        errName.includes('NetworkError') ||
+        err.status === 500 ||
+        err.status === 502 ||
+        err.status === 503 ||
+        err.status === 504 ||
+        errMsg.includes('502') ||
+        errMsg.includes('504') ||
+        errMsg.includes('500') ||
+        errMsg.includes('503') ||
+        errMsg.includes('timeout') ||
+        errMsg.includes('etimedout') ||
+        errMsg.includes('econnreset') ||
+        errMsg.includes('socket hangover');
+
+      if (attempt >= maxRetries || !isNetworkOrTimeout) {
+        console.warn(`[${contextLabel} Retry Exhausted] ⚠️ Fallaron ${attempt}/${maxRetries} reintentos:`, err.message || err);
+        throw err;
+      }
+
+      console.warn(`[${contextLabel} Resilience] ⚠️ Error transitorio de API/Red (${err.message || err}). Reintento ${attempt}/${maxRetries} en ${delay}ms...`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay *= 2; // Exponential Backoff
+    }
+  }
+
+  throw new Error(`[${contextLabel}] Reintentos agotados sin éxito.`);
+}
+
+/**
+ * Adaptador de Exchange con Interceptor Condicional de Órdenes y Resiliencia Geográfica (AWS / Cloud).
+ */
 export class CcxtExchangeAdapter implements IExchangeAdapter {
   private exchange!: Exchange;
   private readonly config: ExchangeConfig;
@@ -141,24 +197,24 @@ export class CcxtExchangeAdapter implements IExchangeAdapter {
 
     try {
       const client = this.exchange as any;
-      if (typeof client.sapiPostSimpleEarnFlexibleRedeem === 'function') {
-        const res = await client.sapiPostSimpleEarnFlexibleRedeem({
-          productId: asset === 'USDT' ? 'USDT001' : asset,
-          amount: amount.toString(),
-        });
-        console.log(`[Binance Simple Earn API] ✅ Rescate exitoso de $${amount.toFixed(2)} ${asset} desde Simple Earn Flexible:`, res);
-        return { success: true, redeemedAmount: amount };
-      } else if (typeof client.privatePostSapiV1SimpleEarnFlexibleRedeem === 'function') {
-        const res = await client.privatePostSapiV1SimpleEarnFlexibleRedeem({
-          productId: asset === 'USDT' ? 'USDT001' : asset,
-          amount: amount.toString(),
-        });
-        console.log(`[Binance Simple Earn REST] ✅ Rescate exitoso de $${amount.toFixed(2)} ${asset} desde Simple Earn Flexible:`, res);
-        return { success: true, redeemedAmount: amount };
-      } else {
-        console.log(`[Binance Simple Earn Fallback] 💉 Rescate de $${amount.toFixed(2)} ${asset} efectuado hacia Billetera Spot.`);
-        return { success: true, redeemedAmount: amount };
-      }
+      const redeemFn = async () => {
+        if (typeof client.sapiPostSimpleEarnFlexibleRedeem === 'function') {
+          return await client.sapiPostSimpleEarnFlexibleRedeem({
+            productId: asset === 'USDT' ? 'USDT001' : asset,
+            amount: amount.toString(),
+          });
+        } else if (typeof client.privatePostSapiV1SimpleEarnFlexibleRedeem === 'function') {
+          return await client.privatePostSapiV1SimpleEarnFlexibleRedeem({
+            productId: asset === 'USDT' ? 'USDT001' : asset,
+            amount: amount.toString(),
+          });
+        }
+        return true;
+      };
+
+      const res = await executeWithRetry(redeemFn, 3, 500, 'redeemSimpleEarn');
+      console.log(`[Binance Simple Earn API] ✅ Rescate exitoso de $${amount.toFixed(2)} ${asset} desde Simple Earn Flexible:`, res);
+      return { success: true, redeemedAmount: amount };
     } catch (err: any) {
       console.warn(`[Binance Simple Earn Warning] Advertencia rescatando fondos de Simple Earn:`, err.message || err);
       return { success: true, redeemedAmount: amount, message: err.message };
@@ -238,7 +294,7 @@ export class CcxtExchangeAdapter implements IExchangeAdapter {
       };
     }
 
-    const rawBalance = await this.exchange.fetchBalance();
+    const rawBalance = await executeWithRetry(() => this.exchange.fetchBalance(), 3, 500, 'fetchBalance');
     const free: Record<string, Decimal> = {};
     const used: Record<string, Decimal> = {};
     const total: Record<string, Decimal> = {};
@@ -291,12 +347,11 @@ export class CcxtExchangeAdapter implements IExchangeAdapter {
     const priceNum = order.price ? order.price.toNumber() : undefined;
 
     try {
-      const rawOrder = await this.exchange.createOrder(
-        order.symbol,
-        order.type,
-        order.side,
-        amountNum,
-        priceNum
+      const rawOrder = await executeWithRetry(
+        () => this.exchange.createOrder(order.symbol, order.type, order.side, amountNum, priceNum),
+        3,
+        500,
+        'createOrder'
       );
       return this.parseCcxtOrder(rawOrder);
     } catch (err: any) {
@@ -319,8 +374,18 @@ export class CcxtExchangeAdapter implements IExchangeAdapter {
       return false;
     }
 
-    await this.exchange.cancelOrder(orderId, symbol);
-    return true;
+    try {
+      await executeWithRetry(
+        () => this.exchange.cancelOrder(orderId, symbol),
+        3,
+        500,
+        'cancelOrder'
+      );
+      return true;
+    } catch (err: any) {
+      console.warn(`[CcxtExchangeAdapter Warning] Error al cancelar orden ${orderId}:`, err.message || err);
+      return false;
+    }
   }
 
   public async fetchOrder(orderId: string, symbol: string): Promise<OrderResult> {
@@ -341,7 +406,12 @@ export class CcxtExchangeAdapter implements IExchangeAdapter {
       };
     }
 
-    const rawOrder = await this.exchange.fetchOrder(orderId, symbol);
+    const rawOrder = await executeWithRetry(
+      () => this.exchange.fetchOrder(orderId, symbol),
+      3,
+      500,
+      'fetchOrder'
+    );
     return this.parseCcxtOrder(rawOrder);
   }
 
@@ -351,7 +421,12 @@ export class CcxtExchangeAdapter implements IExchangeAdapter {
     }
 
     try {
-      const rawOrders = await this.exchange.fetchOpenOrders(symbol);
+      const rawOrders = await executeWithRetry(
+        () => this.exchange.fetchOpenOrders(symbol),
+        3,
+        500,
+        'fetchOpenOrders'
+      );
       return rawOrders.map((raw) => this.parseCcxtOrder(raw));
     } catch (err) {
       console.warn('[ExchangeAdapter] Advertencia al consultar órdenes abiertas:', err);
