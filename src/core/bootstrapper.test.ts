@@ -143,7 +143,7 @@ describe('Bootstrapper - Crash Recovery & State Reconciliation Tests', () => {
 
     expect(result.offlineFillsCount).toBe(1);
     expect(result.newFlipsCreatedCount).toBe(1);
-    expect(mockStateRepository.updateOrderStatusById).toHaveBeenCalledWith('db-ord-2', 'FILLED');
+    expect(mockStateRepository.updateOrderStatusById).toHaveBeenCalledWith('db-ord-2', 'FILLED', undefined, undefined, undefined);
     expect(mockExchangeAdapter.createOrder).toHaveBeenCalled();
     expect(mockStateRepository.createOrderRecord).toHaveBeenCalledWith(
       expect.objectContaining({

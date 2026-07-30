@@ -24,6 +24,10 @@ export const OrderExecutionEventSchema = z.object({
   filled: z.instanceof(Decimal),
   remaining: z.instanceof(Decimal),
   status: OrderStatusSchema,
+  fee: z.object({
+    currency: z.string(),
+    cost: z.instanceof(Decimal),
+  }).optional(),
   timestamp: z.number(),
   gridLevel: z.number().int().optional(),
 });

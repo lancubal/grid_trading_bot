@@ -39,6 +39,10 @@ export interface OrderResult {
   filled: Decimal;
   remaining: Decimal;
   status: 'open' | 'closed' | 'canceled' | 'expired' | 'rejected';
+  fee?: {
+    currency: string;
+    cost: Decimal;
+  };
   timestamp: number;
 }
 
@@ -334,6 +338,10 @@ export class CcxtExchangeAdapter implements IExchangeAdapter {
         filled: new Decimal(0),
         remaining: order.amount,
         status: 'open',
+        fee: {
+          currency: 'BNB',
+          cost: new Decimal(0.000125),
+        },
         timestamp: Date.now(),
       };
 
@@ -402,6 +410,10 @@ export class CcxtExchangeAdapter implements IExchangeAdapter {
         filled: new Decimal(0),
         remaining: new Decimal(0),
         status: 'canceled',
+        fee: {
+          currency: 'BNB',
+          cost: new Decimal(0.000125),
+        },
         timestamp: Date.now(),
       };
     }
@@ -449,14 +461,26 @@ export class CcxtExchangeAdapter implements IExchangeAdapter {
         order.status = 'closed';
         order.filled = order.amount;
         order.remaining = new Decimal(0);
+        order.fee = {
+          currency: 'BNB',
+          cost: new Decimal(0.000125),
+        };
         this.simulatedOpenOrders.delete(id);
 
-        console.log(`[Dry-Run Match Engine] ⚡ FILL SIMULADO EN VIVO: UUID v4 ${id} | ${order.side.toUpperCase()} ${order.amount} @ $${order.price.toFixed(2)} (Precio Mercado: $${marketPrice.toFixed(2)})`);
+        console.log(`[Dry-Run Match Engine] ⚡ FILL SIMULADO EN VIVO: UUID v4 ${id} | ${order.side.toUpperCase()} ${order.amount} @ $${order.price.toFixed(2)} (Comisión: 0.000125 BNB)`);
       }
     }
   }
 
   private parseCcxtOrder(rawOrder: Order): OrderResult {
+    let fee: { currency: string; cost: Decimal } | undefined = undefined;
+    if (rawOrder.fee && rawOrder.fee.currency !== undefined) {
+      fee = {
+        currency: String(rawOrder.fee.currency),
+        cost: new Decimal(rawOrder.fee.cost ?? 0),
+      };
+    }
+
     return {
       id: rawOrder.id ?? '',
       symbol: rawOrder.symbol ?? '',
@@ -467,6 +491,7 @@ export class CcxtExchangeAdapter implements IExchangeAdapter {
       filled: new Decimal(rawOrder.filled ?? 0),
       remaining: new Decimal(rawOrder.remaining ?? 0),
       status: (rawOrder.status as OrderResult['status']) || 'open',
+      fee,
       timestamp: rawOrder.timestamp ?? Date.now(),
     };
   }

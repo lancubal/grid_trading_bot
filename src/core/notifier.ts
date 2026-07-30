@@ -8,6 +8,8 @@ export interface OrderNotificationData {
   usdtBalance?: Decimal | number;
   netProfitUsd?: Decimal | number;
   gridLevel?: number;
+  feeCurrency?: string;
+  feeCost?: Decimal | number;
 }
 
 export interface DailySummaryData {
@@ -54,13 +56,22 @@ export class SlackNotifier {
     const priceStr = new Decimal(data.price).toFixed(2);
     const symbol = data.symbol;
 
+    let feeText = '';
+    if (data.feeCurrency && data.feeCost !== undefined) {
+      const feeCostStr = new Decimal(data.feeCost).toFixed(6);
+      const isBnb = data.feeCurrency.toUpperCase() === 'BNB';
+      feeText = isBnb
+        ? ` | 🪙 Fee: *${feeCostStr} BNB* (-25% desc.)`
+        : ` | Fee: ${feeCostStr} ${data.feeCurrency}`;
+    }
+
     let text = '';
     if (sideUpper === 'BUY') {
       const usdtStr = data.usdtBalance !== undefined ? `$${new Decimal(data.usdtBalance).toFixed(2)}` : 'N/A';
-      text = `🟢 *COMPRA EJECUTADA*: ${amountStr} ${symbol.split('/')[0]} @ $${priceStr} USD | Saldo USDT: ${usdtStr}`;
+      text = `🟢 *COMPRA EJECUTADA*: ${amountStr} ${symbol.split('/')[0]} @ $${priceStr} USD | Saldo USDT: ${usdtStr}${feeText}`;
     } else {
       const profitStr = data.netProfitUsd !== undefined ? `+$${new Decimal(data.netProfitUsd).toFixed(2)} USD` : '+$1.50 USD (Est.)';
-      text = `🔴 *VENTA (Flip) EJECUTADA*: ${amountStr} ${symbol.split('/')[0]} @ $${priceStr} USD | Profit Neto: *${profitStr}*`;
+      text = `🔴 *VENTA (Flip) EJECUTADA*: ${amountStr} ${symbol.split('/')[0]} @ $${priceStr} USD | Profit Neto: *${profitStr}*${feeText}`;
     }
 
     return this.sendSlackMessage(text);
@@ -77,7 +88,7 @@ export class SlackNotifier {
       `• *Flips Completados Hoy:* ${summary.flipsCompleted} ciclos\n` +
       `• *Ganancia Neta Realizada:* *+$${summary.netProfitUsd.toFixed(2)} USD*\n` +
       `• *Volumen Transaccionado:* $${summary.totalVolumeUsd.toFixed(2)} USD\n` +
-      `• *Comisiones Maker Pagadas:* $${summary.totalFeesUsd.toFixed(4)} USD\n` +
+      `• *Comisiones Pagadas:* $${summary.totalFeesUsd.toFixed(4)} USD\n` +
       `• *Balances Actuales:* ${summary.btcBalance.toFixed(4)} BTC | $${summary.usdtBalance.toFixed(2)} USDT\n` +
       `• *Estado Volatilidad ATR:* $${summary.atrValue.toFixed(2)} USD (Rango: $${summary.minGridRange.toLocaleString()} - $${summary.maxGridRange.toLocaleString()})`;
 

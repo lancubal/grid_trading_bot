@@ -73,8 +73,16 @@ export class Bootstrapper {
           if (exchangeOrder.status === 'closed') {
             console.log(`[Bootstrapper] ⚡ Fill detectado offline: Orden ${dbOrder.exchangeId} Nivel ${dbOrder.gridLevelId} se ejecutó.`);
             
-            // Actualizar orden como FILLED en BD
-            await this.stateRepository.updateOrderStatusById(dbOrder.id, 'FILLED');
+            // Actualizar orden como FILLED en BD registrando feeCurrency y feeCost
+            const feeCost = exchangeOrder.fee?.cost;
+            const feeCurrency = exchangeOrder.fee?.currency;
+            await this.stateRepository.updateOrderStatusById(
+              dbOrder.id,
+              'FILLED',
+              feeCost,
+              feeCurrency,
+              feeCost
+            );
             result.offlineFillsCount++;
 
             // Generar contra-orden ("Flip")

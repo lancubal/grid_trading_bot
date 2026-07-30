@@ -35,7 +35,13 @@ describe('LocalMatchingEngine - Virtual Order Matching Tests', () => {
     // Ticker en $63,900 USD (menor o igual a $64,000 USD): Debe emparejar y actualizar BD
     await engine.processLivePrice(new Decimal(63900));
 
-    expect(mockRepo.updateOrderStatusById).toHaveBeenCalledWith('db-ord-1', OrderStatus.FILLED, expect.any(Decimal));
+    expect(mockRepo.updateOrderStatusById).toHaveBeenCalledWith(
+      'db-ord-1',
+      OrderStatus.FILLED,
+      expect.any(Decimal),
+      'BNB',
+      expect.any(Decimal)
+    );
     expect(fillSpy).toHaveBeenCalledTimes(1);
 
     const payload = fillSpy.mock.calls[0][0];
@@ -69,7 +75,13 @@ describe('LocalMatchingEngine - Virtual Order Matching Tests', () => {
     // Ticker en $66,100 USD (mayor o igual a $66,000 USD): Debe emparejar
     await engine.processLivePrice(new Decimal(66100));
 
-    expect(mockRepo.updateOrderStatusById).toHaveBeenCalledWith('db-ord-2', OrderStatus.FILLED, expect.any(Decimal));
+    expect(mockRepo.updateOrderStatusById).toHaveBeenCalledWith(
+      'db-ord-2',
+      OrderStatus.FILLED,
+      expect.any(Decimal),
+      'BNB',
+      expect.any(Decimal)
+    );
     expect(fillSpy).toHaveBeenCalledTimes(1);
     expect(fillSpy.mock.calls[0][0].side).toBe('sell');
   });

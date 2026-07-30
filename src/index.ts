@@ -247,7 +247,19 @@ async function main() {
       amount: event.amount,
       price: event.price,
       gridLevel: event.gridLevel,
+      feeCurrency: event.fee?.currency,
+      feeCost: event.fee?.cost,
     });
+
+    if (event.id) {
+      await repository.updateOrderStatusByExchangeId(
+        event.id,
+        OrderStatus.FILLED,
+        event.fee?.cost,
+        event.fee?.currency,
+        event.fee?.cost
+      );
+    }
 
     const flipPlan = gridManager.handleOrderFill(event);
     if (flipPlan) {

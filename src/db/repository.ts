@@ -70,6 +70,8 @@ export class StateRepository {
     gridLevelId: number;
     status?: OrderStatus;
     fee?: Decimal;
+    feeCurrency?: string;
+    feeCost?: Decimal;
   }) {
     return this.prisma.order.create({
       data: {
@@ -81,6 +83,8 @@ export class StateRepository {
         gridLevelId: data.gridLevelId,
         status: data.status ?? OrderStatus.PENDING,
         fee: data.fee ? new Decimal(data.fee) : undefined,
+        feeCurrency: data.feeCurrency,
+        feeCost: data.feeCost ? new Decimal(data.feeCost) : undefined,
       },
     });
   }
@@ -91,13 +95,17 @@ export class StateRepository {
   public async updateOrderStatusById(
     orderId: string,
     status: OrderStatus,
-    fee?: Decimal
+    fee?: Decimal,
+    feeCurrency?: string,
+    feeCost?: Decimal
   ) {
     return this.prisma.order.update({
       where: { id: orderId },
       data: {
         status,
         ...(fee ? { fee: new Decimal(fee) } : {}),
+        ...(feeCurrency ? { feeCurrency } : {}),
+        ...(feeCost ? { feeCost: new Decimal(feeCost) } : {}),
       },
     });
   }
@@ -108,13 +116,17 @@ export class StateRepository {
   public async updateOrderStatusByExchangeId(
     exchangeId: string,
     status: OrderStatus,
-    fee?: Decimal
+    fee?: Decimal,
+    feeCurrency?: string,
+    feeCost?: Decimal
   ) {
     return this.prisma.order.update({
       where: { exchangeId },
       data: {
         status,
         ...(fee ? { fee: new Decimal(fee) } : {}),
+        ...(feeCurrency ? { feeCurrency } : {}),
+        ...(feeCost ? { feeCost: new Decimal(feeCost) } : {}),
       },
     });
   }

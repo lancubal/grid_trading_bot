@@ -56,11 +56,17 @@ export class LocalMatchingEngine {
     const totalValueUsd = executedPrice.times(amount);
     const simulatedFeeUsd = totalValueUsd.times(this.makerFeeRate);
 
-    // Actualizar estado en Prisma como FILLED con la comisión Maker
-    await this.repository.updateOrderStatusById(dbOrder.id, OrderStatus.FILLED, simulatedFeeUsd);
+    // Actualizar estado en Prisma como FILLED registrando comisiones reales
+    await this.repository.updateOrderStatusById(
+      dbOrder.id,
+      OrderStatus.FILLED,
+      simulatedFeeUsd,
+      'BNB',
+      new Decimal(0.000125)
+    );
 
     console.log(
-      `[Matching Engine] ⚡ FILL SIMULADO EN BD: ID ${dbOrder.id} (${dbOrder.exchangeId || 'Virtual'}) | ${dbOrder.side} ${amount} @ $${executedPrice.toFixed(2)} USD (Comisión Maker: $${simulatedFeeUsd.toFixed(4)} USD)`
+      `[Matching Engine] ⚡ FILL SIMULADO EN BD: ID ${dbOrder.id} (${dbOrder.exchangeId || 'Virtual'}) | ${dbOrder.side} ${amount} @ $${executedPrice.toFixed(2)} USD (Comisión: 0.000125 BNB)`
     );
 
     const eventPayload: OrderExecutionEvent = {
@@ -74,6 +80,10 @@ export class LocalMatchingEngine {
       filled: amount,
       remaining: new Decimal(0),
       status: 'closed',
+      fee: {
+        currency: 'BNB',
+        cost: new Decimal(0.000125),
+      },
       timestamp: Date.now(),
       gridLevel: dbOrder.gridLevelId,
     };
