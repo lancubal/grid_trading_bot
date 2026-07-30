@@ -5,6 +5,12 @@ services:
     image: postgres:16-alpine
     container_name: grid_trading_db
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
     logging:
       driver: "json-file"
       options:
@@ -30,6 +36,12 @@ services:
       dockerfile: Dockerfile
     container_name: grid_trading_bot
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+        reservations:
+          memory: 192M
     logging:
       driver: "json-file"
       options:
@@ -42,7 +54,8 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-grid_bot}?schema=public
-    command: sh -c "npx prisma db push --accept-data-loss && node dist/index.js"
+      NODE_OPTIONS: "--max-old-space-size=256"
+    command: sh -c "npx prisma migrate deploy && node dist/index.js"
 
 volumes:
   postgres_data:
