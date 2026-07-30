@@ -12,6 +12,8 @@ import { Bootstrapper } from './core/bootstrapper';
 import { AtrCalculator } from './core/atrCalculator';
 import { LiveVolatilityEngine } from './core/volatility';
 import { LocalMatchingEngine } from './core/matchingEngine';
+import { SlackNotifier } from './core/notifier';
+import { setupDailyReportCron } from './cron/dailyReport';
 import { OHLCV } from './backtest/backtester';
 
 async function main() {
@@ -20,6 +22,10 @@ async function main() {
   console.log('====================================================');
 
   const env = loadEnvConfig();
+
+  // Módulo de Notificaciones & Observabilidad (Slack)
+  const notifier = new SlackNotifier(env.ENABLE_NOTIFICATIONS, env.SLACK_WEBHOOK_URL);
+  console.log(`[Observability] 📡 Slack Notifier: ${notifier.isEnabled() ? 'ACTIVADO (Babysitting activo 🟢)' : 'SILENCIADO (Kill-Switch ENABLE_NOTIFICATIONS=false 🔴)'}`);
 
   // Consultar si existe un capital dinámico configurado en la BD
   const repository = new StateRepository();
@@ -151,6 +157,15 @@ async function main() {
             console.log(
               `[Auto-Injector] ✅ RESCATE COMPLETADO: $${env.AUTO_INJECT_AMOUNT_USD.toFixed(2)} USDT transferidos desde Simple Earn Flexible ➔ Spot. Nuevo capital grilla: $${newInvestment.toFixed(2)} USD | Total asignado acumulado: $${newLifetimeAllocation.toFixed(2)} / $${env.MAX_LIFETIME_ALLOCATION_USD.toFixed(2)} USD | Cooldown ${env.AUTO_INJECT_COOLDOWN_DAYS} días activado.\n`
             );
+
+            // Notificación a Slack
+            await notifier.notifyAutoInjection({
+              amountUsd: env.AUTO_INJECT_AMOUNT_USD.toNumber(),
+              lifetimeAllocationUsd: newLifetimeAllocation.toNumber(),
+              maxLifetimeAllocationUsd: env.MAX_LIFETIME_ALLOCATION_USD.toNumber(),
+              cooldownDays: env.AUTO_INJECT_COOLDOWN_DAYS,
+            });
+
             return true;
           }
         }
@@ -176,9 +191,18 @@ async function main() {
     });
   }
 
-  // Listener para realizar el "Flip" cuando se reciba una notificación de orden ejecutada (Matching Engine local o WebSocket privado de Binance)
+  // Listener para realizar el "Flip" cuando se reciba una notificación de orden ejecutada + Alertas a Slack en Tiempo Real
   systemBus.on('ORDER_FILLED', async (event) => {
     console.log(`[Flip Event Bus] ⚡ ORDER_FILLED recibida para Nivel ${event.gridLevel}. Generando contra-orden ("Flip")...`);
+
+    // Notificación en vivo a Slack
+    await notifier.notifyOrderExecution({
+      side: event.side,
+      symbol,
+      amount: event.amount,
+      price: event.price,
+      gridLevel: event.gridLevel,
+    });
 
     const flipPlan = gridManager.handleOrderFill(event);
     if (flipPlan) {
@@ -206,11 +230,23 @@ async function main() {
     }
   });
 
-  // 7. Ejecutar Reconciliador / Bootstrapper al reiniciar
+  // 7. Registrar Tarea Programada de Cierre Diario (00:00 UTC)
+  setupDailyReportCron(repository, notifier, () => {
+    const config = gridManager.getConfig();
+    return {
+      atrValue: initialAtr.toNumber(),
+      minGridRange: config.lowerPrice.toNumber(),
+      maxGridRange: config.upperPrice.toNumber(),
+      usdtBalance: 1000.0,
+      btcBalance: 0.0022,
+    };
+  });
+
+  // 8. Ejecutar Reconciliador / Bootstrapper al reiniciar
   const bootstrapper = new Bootstrapper(exchangeAdapter, repository, gridManager);
   await bootstrapper.reconcile(symbol);
 
-  // 8. Siembra Inicial de Órdenes si es una Grilla Nueva
+  // 9. Siembra Inicial de Órdenes si es una Grilla Nueva
   const openOrdersInDb = await repository.getOpenOrders();
 
   if (openOrdersInDb.length === 0) {
@@ -262,7 +298,7 @@ async function main() {
     }
   }
 
-  // 9. Reacción al Evento VOLATILITY_CHANGE: Cancelar órdenes virtuales y re-dibujar 15 escalones con Inventory Cost Guard
+  // 10. Reacción al Evento VOLATILITY_CHANGE: Cancelar órdenes virtuales y re-dibujar 15 escalones con Inventory Cost Guard
   volatilityEngine.on('VOLATILITY_CHANGE', async (newAtr: Decimal) => {
     console.log(`\n[Rebalance Trigger] ⚡ Evento VOLATILITY_CHANGE Recibido (Nuevo ATR: $${newAtr.toFixed(2)} USD). Re-ajustando grilla...`);
 
@@ -318,9 +354,9 @@ async function main() {
 
   await volatilityEngine.start(symbol, env.ATR_TIMEFRAME, env.ATR_PERIOD);
 
-  // 10. Bucle de Tickers de Mercado en Vivo con Monitoreo Periódico de Autodefensa (Alerta de Sed)
+  // 11. Bucle de Tickers de Mercado en Vivo con Monitoreo Periódico de Autodefensa (Alerta de Sed)
   console.log('====================================================');
-  console.log('🟢 BOT OPERANDO EN TIEMPO REAL CON FIREWALL DE AUTODEFENSA');
+  console.log('🟢 BOT OPERANDO EN TIEMPO REAL CON FIREWALL DE AUTODEFENSA Y OBSERVABILIDAD SLACK');
   console.log('====================================================');
 
   let tickCount = 0;

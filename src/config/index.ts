@@ -56,6 +56,16 @@ export const EnvSchema = z.object({
     .transform((val) => new Decimal(val))
     .default('10000.00'),
 
+  // Alertas y Observabilidad (Slack Notifications & Kill-Switch)
+  ENABLE_NOTIFICATIONS: z
+    .string()
+    .transform((val) => val.toLowerCase() === 'true')
+    .default('true'),
+  SLACK_WEBHOOK_URL: z
+    .string()
+    .optional()
+    .default(''),
+
   // Base de Datos PostgreSQL
   DATABASE_URL: z.string().url(),
 
