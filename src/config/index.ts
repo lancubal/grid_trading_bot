@@ -30,6 +30,11 @@ export const EnvSchema = z.object({
     .transform((val) => new Decimal(val))
     .default('6000.00'),
 
+  // Cortacircuitos de Velocidad (Circuit Breaker)
+  CIRCUIT_BREAKER_DROP_PCT: z.coerce.number().default(5.0),
+  CIRCUIT_BREAKER_WINDOW_MINS: z.coerce.number().int().default(15),
+  CIRCUIT_BREAKER_COOLDOWN_HOURS: z.coerce.number().default(2.0),
+
   // Parámetros de Riesgo y Blindaje de Capital (Adaptativos según capital grilla)
   MAX_ORDER_VALUE_USD: z
     .string()

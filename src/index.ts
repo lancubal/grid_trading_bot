@@ -13,6 +13,7 @@ import { AtrCalculator } from './core/atrCalculator';
 import { LiveVolatilityEngine } from './core/volatility';
 import { LocalMatchingEngine } from './core/matchingEngine';
 import { SlackNotifier } from './core/notifier';
+import { CircuitBreaker } from './core/circuitBreaker';
 import { setupDailyReportCron } from './cron/dailyReport';
 import { OHLCV } from './backtest/backtester';
 
@@ -26,6 +27,14 @@ async function main() {
   // Módulo de Notificaciones & Observabilidad (Slack)
   const notifier = new SlackNotifier(env.ENABLE_NOTIFICATIONS, env.SLACK_WEBHOOK_URL);
   console.log(`[Observability] 📡 Slack Notifier: ${notifier.isEnabled() ? 'ACTIVADO (Babysitting activo 🟢)' : 'SILENCIADO (Kill-Switch ENABLE_NOTIFICATIONS=false 🔴)'}`);
+
+  // Cortacircuitos de Velocidad (Circuit Breaker) Anti-Flash Crash
+  const circuitBreaker = new CircuitBreaker({
+    dropThresholdPct: env.CIRCUIT_BREAKER_DROP_PCT,
+    windowMins: env.CIRCUIT_BREAKER_WINDOW_MINS,
+    cooldownHours: env.CIRCUIT_BREAKER_COOLDOWN_HOURS,
+  });
+  console.log(`[Circuit Breaker] ⚡ Cortacircuitos cargado (Umbral: -${env.CIRCUIT_BREAKER_DROP_PCT}% en ${env.CIRCUIT_BREAKER_WINDOW_MINS}m | Cooldown: ${env.CIRCUIT_BREAKER_COOLDOWN_HOURS}h)`);
 
   // Consultar si existe un capital dinámico configurado en la BD
   const repository = new StateRepository();
@@ -236,6 +245,12 @@ async function main() {
 
     const flipPlan = gridManager.handleOrderFill(event);
     if (flipPlan) {
+      // Si el cortacircuitos está activo y la contra-orden es una COMPRA, frenar
+      if (flipPlan.side === 'buy' && circuitBreaker.getStatus().isTripped) {
+        console.warn(`[CircuitBreaker] 🛑 Contra-orden de COMPRA (Flip) bloqueada por Cortacircuitos activo.`);
+        return;
+      }
+
       try {
         const createdFlip = await exchangeAdapter.createOrder({
           symbol,
@@ -348,6 +363,12 @@ async function main() {
 
   // 10. Reacción al Evento VOLATILITY_CHANGE: Cancelar órdenes virtuales y re-dibujar 15 escalones con Inventory Cost Guard
   volatilityEngine.on('VOLATILITY_CHANGE', async (newAtr: Decimal) => {
+    // Si el cortacircuitos está activado, suspender re-ajustes de grilla
+    if (circuitBreaker.getStatus().isTripped) {
+      console.warn(`[Rebalance Suspended] 🛑 Re-ajuste por volatilidad ATR pausado temporalmente por Cortacircuitos activo.`);
+      return;
+    }
+
     console.log(`\n[Rebalance Trigger] ⚡ Evento VOLATILITY_CHANGE Recibido (Nuevo ATR: $${newAtr.toFixed(2)} USD). Re-ajustando grilla...`);
 
     const latestTicker = await exchangeAdapter.fetchTicker(symbol);
@@ -411,9 +432,9 @@ async function main() {
 
   await volatilityEngine.start(symbol, env.ATR_TIMEFRAME, env.ATR_PERIOD);
 
-  // 11. Bucle de Tickers de Mercado en Vivo con Monitoreo Periódico de Autodefensa (Alerta de Sed)
+  // 11. Bucle de Tickers de Mercado en Vivo con Monitoreo Periódico de Autodefensa y Cortacircuitos
   console.log('====================================================');
-  console.log('🟢 BOT OPERANDO EN TIEMPO REAL CON FIREWALL DE AUTODEFENSA Y OBSERVABILIDAD SLACK');
+  console.log('🟢 BOT OPERANDO EN TIEMPO REAL CON CORTACIRCUITOS ANTI-FLASH CRASH');
   console.log('====================================================');
 
   let tickCount = 0;
@@ -421,6 +442,39 @@ async function main() {
     try {
       const ticker = await exchangeAdapter.fetchTicker(symbol);
       tickCount++;
+
+      // Evaluar la salud del mercado en el Cortacircuitos
+      const healthCheck = circuitBreaker.checkMarketHealth(ticker.last);
+
+      if (healthCheck.isTripped) {
+        if (healthCheck.justTripped && healthCheck.message) {
+          console.warn(`[CircuitBreaker Alert] ${healthCheck.message}`);
+
+          // 1. Notificar a Slack inmediatamente
+          await notifier.notifyOrderExecution({
+            side: 'BUY',
+            symbol,
+            amount: 0,
+            price: ticker.last,
+            netProfitUsd: 0,
+          });
+
+          // 2. Cancelar proactivamente todas las órdenes LÍMITE DE COMPRA abiertas
+          const currentOrders = await repository.getOpenOrders();
+          for (const ord of currentOrders) {
+            if (ord.side === OrderSide.BUY) {
+              if (ord.exchangeId) {
+                await exchangeAdapter.cancelOrder(ord.exchangeId, symbol);
+              }
+              await repository.updateOrderStatusById(ord.id, OrderStatus.CANCELED);
+            }
+          }
+          console.log(`[CircuitBreaker] 🛑 Todas las órdenes de COMPRA canceladas proactivamente. Manteniendo órdenes de VENTA para rebotes rápidos.`);
+        }
+
+        // Si está en pausa, omitir procesamiento de compras y matching
+        return;
+      }
 
       if (env.DRY_RUN) {
         await matchingEngine.processLivePrice(ticker.last);
