@@ -14,6 +14,7 @@ import { LiveVolatilityEngine } from './core/volatility';
 import { LocalMatchingEngine } from './core/matchingEngine';
 import { SlackNotifier } from './core/notifier';
 import { CircuitBreaker } from './core/circuitBreaker';
+import { FomoGuard } from './core/fomoGuard';
 import { setupDailyReportCron } from './cron/dailyReport';
 import { OHLCV } from './backtest/backtester';
 
@@ -35,6 +36,10 @@ async function main() {
     cooldownHours: env.CIRCUIT_BREAKER_COOLDOWN_HOURS,
   });
   console.log(`[Circuit Breaker] ⚡ Cortacircuitos cargado (Umbral: -${env.CIRCUIT_BREAKER_DROP_PCT}% en ${env.CIRCUIT_BREAKER_WINDOW_MINS}m | Cooldown: ${env.CIRCUIT_BREAKER_COOLDOWN_HOURS}h)`);
+
+  // Bloqueo FOMO (Escudo Anti-Comprar la Cima de un Pump)
+  const fomoGuard = new FomoGuard({ cooldownHours: env.FOMO_COOLDOWN_HOURS });
+  console.log(`[FomoGuard] 🛡️ Escudo Anti-FOMO cargado (Cooldown tras romper techo: ${env.FOMO_COOLDOWN_HOURS}h)`);
 
   // Consultar si existe un capital dinámico configurado en la BD
   const repository = new StateRepository();
@@ -369,9 +374,26 @@ async function main() {
       return;
     }
 
-    console.log(`\n[Rebalance Trigger] ⚡ Evento VOLATILITY_CHANGE Recibido (Nuevo ATR: $${newAtr.toFixed(2)} USD). Re-ajustando grilla...`);
-
     const latestTicker = await exchangeAdapter.fetchTicker(symbol);
+    const highestGridLevel = gridManager.getConfig().upperPrice;
+
+    // Evaluaciones de Bloqueo FOMO (Escudo Anti-Comprar la Cima de un Pump)
+    const fomoCheck = fomoGuard.checkFomoRisk(latestTicker.last, highestGridLevel);
+    if (fomoCheck.isBlocked) {
+      console.warn(`[FomoGuard Trigger] 🛑 ${fomoCheck.message}`);
+      if (fomoCheck.justBlocked && fomoCheck.message) {
+        await notifier.notifyOrderExecution({
+          side: 'SELL',
+          symbol,
+          amount: 0,
+          price: latestTicker.last,
+          netProfitUsd: 0,
+        });
+      }
+      return;
+    }
+
+    console.log(`\n[Rebalance Trigger] ⚡ Evento VOLATILITY_CHANGE Recibido (Nuevo ATR: $${newAtr.toFixed(2)} USD). Re-ajustando grilla...`);
 
     // Obtener los costos de compra del inventario retenido antes de cancelar
     const currentOpenOrders = await repository.getOpenOrders();
@@ -434,7 +456,7 @@ async function main() {
 
   // 11. Bucle de Tickers de Mercado en Vivo con Monitoreo Periódico de Autodefensa y Cortacircuitos
   console.log('====================================================');
-  console.log('🟢 BOT OPERANDO EN TIEMPO REAL CON CORTACIRCUITOS ANTI-FLASH CRASH');
+  console.log('🟢 BOT OPERANDO EN TIEMPO REAL CON CORTACIRCUITOS Y BLOQUEO FOMO');
   console.log('====================================================');
 
   let tickCount = 0;

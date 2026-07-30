@@ -35,6 +35,9 @@ export const EnvSchema = z.object({
   CIRCUIT_BREAKER_WINDOW_MINS: z.coerce.number().int().default(15),
   CIRCUIT_BREAKER_COOLDOWN_HOURS: z.coerce.number().default(2.0),
 
+  // Bloqueo FOMO (Escudo Anti-Comprar la Cima de un Pump)
+  FOMO_COOLDOWN_HOURS: z.coerce.number().default(4.0),
+
   // Parámetros de Riesgo y Blindaje de Capital (Adaptativos según capital grilla)
   MAX_ORDER_VALUE_USD: z
     .string()
