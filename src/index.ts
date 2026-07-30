@@ -54,6 +54,36 @@ async function main() {
   const exchangeAdapter: IExchangeAdapter = new CcxtExchangeAdapter(exchangeConfig);
   await exchangeAdapter.initialize();
 
+  // 🔴 VALIDACIÓN DE BALANCE INICIAL (COLD START - PRODUCCIÓN EN VIVO)
+  if (!env.DRY_RUN) {
+    console.log('[Cold Start] 🔍 Verificando saldo físico real en Binance Spot via CCXT fetchBalance()...');
+    try {
+      const realBalance = await exchangeAdapter.fetchBalance();
+      const freeUsdt = realBalance.free['USDT'] ? new Decimal(realBalance.free['USDT']) : new Decimal(0);
+      const freeBtc = realBalance.free['BTC'] ? new Decimal(realBalance.free['BTC']) : new Decimal(0);
+
+      console.log(`[Cold Start] 💰 Saldo físico confirmado: $${freeUsdt.toFixed(2)} USDT libre | ${freeBtc.toFixed(6)} BTC libre.`);
+
+      if (freeUsdt.lessThan(rawGridConfig.investment)) {
+        console.warn(
+          `[Cold Start Alert] ⚠️ Saldo disponible ($${freeUsdt.toFixed(2)} USDT) es inferior al capital asignado a la grilla ($${rawGridConfig.investment.toFixed(2)} USD).`
+        );
+
+        // Intentar autodefensa desde Simple Earn Flexible si faltan USDT para la grilla
+        if (exchangeAdapter.redeemSimpleEarnFlexible) {
+          const missingUsdt = rawGridConfig.investment.minus(freeUsdt);
+          console.log(`[Cold Start Auto-Rescate] 💉 Intentando rescatar $${missingUsdt.toFixed(2)} USDT de Binance Simple Earn Flexible para completar capital de siembra...`);
+          const rescue = await exchangeAdapter.redeemSimpleEarnFlexible('USDT', missingUsdt);
+          if (rescue.success) {
+            console.log(`[Cold Start Auto-Rescate] ✅ Rescate exitoso. Saldo Spot completado para la siembra inicial.`);
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error('[Cold Start Error] Error al consultar saldo inicial en Binance:', err.message || err);
+    }
+  }
+
   // 3. Descargar velas recientes para calcular ATR inicial y adaptar ancho de grilla
   const symbol = env.GRID_SYMBOL;
   const cleanSymbol = symbol.replace('/', '');
