@@ -5,6 +5,11 @@ services:
     image: postgres:16-alpine
     container_name: grid_trading_db
     restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -25,6 +30,11 @@ services:
       dockerfile: Dockerfile
     container_name: grid_trading_bot
     restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       postgres:
         condition: service_healthy
