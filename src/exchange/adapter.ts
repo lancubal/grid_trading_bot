@@ -61,8 +61,27 @@ export interface IExchangeAdapter {
 }
 
 /**
- * Adaptador de Exchange con Interceptor Condicional de Órdenes y Resiliencia Geográfica (AWS / Cloud).
- */
+  * Identifica específicamente si un error retornado por Binance/CCXT corresponde a "Insufficient Funds" (Código Binance -2010)
+  */
+export function isInsufficientFundsError(err: any): boolean {
+  if (!err) return false;
+  if (typeof ccxt !== 'undefined' && ccxt.InsufficientFunds && err instanceof ccxt.InsufficientFunds) {
+    return true;
+  }
+  const errMsg = (err.message || err.toString() || '').toLowerCase();
+  const errCode = String(err.code || err.name || '');
+  return (
+    errMsg.includes('insufficient') ||
+    errMsg.includes('-2010') ||
+    errMsg.includes('account has insufficient balance') ||
+    errCode.includes('InsufficientFunds') ||
+    errCode === '-2010'
+  );
+}
+
+/**
+  * Adaptador de Exchange con Interceptor Condicional de Órdenes y Resiliencia Geográfica (AWS / Cloud).
+  */
 export class CcxtExchangeAdapter implements IExchangeAdapter {
   private exchange!: Exchange;
   private readonly config: ExchangeConfig;
@@ -271,15 +290,21 @@ export class CcxtExchangeAdapter implements IExchangeAdapter {
     const amountNum = order.amount.toNumber();
     const priceNum = order.price ? order.price.toNumber() : undefined;
 
-    const rawOrder = await this.exchange.createOrder(
-      order.symbol,
-      order.type,
-      order.side,
-      amountNum,
-      priceNum
-    );
-
-    return this.parseCcxtOrder(rawOrder);
+    try {
+      const rawOrder = await this.exchange.createOrder(
+        order.symbol,
+        order.type,
+        order.side,
+        amountNum,
+        priceNum
+      );
+      return this.parseCcxtOrder(rawOrder);
+    } catch (err: any) {
+      if (isInsufficientFundsError(err)) {
+        console.warn(`[Binance API Warning] ⚠️ Orden rechazada por SALDO INSUFFICIENT (Código Binance -2010): ${err.message || err}`);
+      }
+      throw err;
+    }
   }
 
   public async cancelOrder(orderId: string, symbol: string): Promise<boolean> {

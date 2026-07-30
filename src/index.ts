@@ -4,7 +4,7 @@ import Decimal from 'decimal.js';
 import { OrderSide, OrderStatus } from '@prisma/client';
 import { loadEnvConfig, getGridConfigFromEnv } from './config';
 import { StateRepository } from './db/repository';
-import { CcxtExchangeAdapter, IExchangeAdapter } from './exchange/adapter';
+import { CcxtExchangeAdapter, IExchangeAdapter, isInsufficientFundsError } from './exchange/adapter';
 import { CcxtExchangeStreams, IExchangeStreams } from './exchange/streams';
 import { GridManager } from './core/gridManager';
 import { RiskGuard } from './core/riskGuard';
@@ -236,27 +236,36 @@ async function main() {
 
     const flipPlan = gridManager.handleOrderFill(event);
     if (flipPlan) {
-      const createdFlip = await exchangeAdapter.createOrder({
-        symbol,
-        type: 'limit',
-        side: flipPlan.side,
-        amount: flipPlan.amount,
-        price: flipPlan.price,
-      });
+      try {
+        const createdFlip = await exchangeAdapter.createOrder({
+          symbol,
+          type: 'limit',
+          side: flipPlan.side,
+          amount: flipPlan.amount,
+          price: flipPlan.price,
+        });
 
-      await repository.createOrderRecord({
-        exchangeId: createdFlip.id,
-        symbol: createdFlip.symbol,
-        side: flipPlan.side === 'buy' ? OrderSide.BUY : OrderSide.SELL,
-        price: createdFlip.price,
-        amount: createdFlip.amount,
-        gridLevelId: flipPlan.levelIndex,
-        status: OrderStatus.OPEN,
-      });
+        await repository.createOrderRecord({
+          exchangeId: createdFlip.id,
+          symbol: createdFlip.symbol,
+          side: flipPlan.side === 'buy' ? OrderSide.BUY : OrderSide.SELL,
+          price: createdFlip.price,
+          amount: createdFlip.amount,
+          gridLevelId: flipPlan.levelIndex,
+          status: OrderStatus.OPEN,
+        });
 
-      await repository.upsertGridLevel(flipPlan.levelIndex, flipPlan.price, flipPlan.side === 'sell');
+        await repository.upsertGridLevel(flipPlan.levelIndex, flipPlan.price, flipPlan.side === 'sell');
 
-      console.log(`[Flip Executed] 🔄 Contra-orden ("Flip") ${flipPlan.side.toUpperCase()} colocada a $${flipPlan.price.toFixed(2)} USD (Nivel ${flipPlan.levelIndex})`);
+        console.log(`[Flip Executed] 🔄 Contra-orden ("Flip") ${flipPlan.side.toUpperCase()} colocada a $${flipPlan.price.toFixed(2)} USD (Nivel ${flipPlan.levelIndex})`);
+      } catch (err: any) {
+        if (isInsufficientFundsError(err)) {
+          console.warn(`[Flip Insufficient Funds Alert] 🚨 Binance rechazó orden Flip por saldo insuficiente (-2010). Disparando Alerta de Sed e Inyección de Emergencia...`);
+          await checkAndExecuteAutoInjection(true);
+        } else {
+          console.error(`[Flip Execution Error] Error al crear orden Flip:`, err.message || err);
+        }
+      }
     }
   });
 
@@ -300,25 +309,34 @@ async function main() {
         continue;
       }
 
-      const createdOrder = await exchangeAdapter.createOrder({
-        symbol,
-        type: 'limit',
-        side: plan.side,
-        amount: plan.amount,
-        price: plan.price,
-      });
+      try {
+        const createdOrder = await exchangeAdapter.createOrder({
+          symbol,
+          type: 'limit',
+          side: plan.side,
+          amount: plan.amount,
+          price: plan.price,
+        });
 
-      await repository.upsertGridLevel(plan.levelIndex, plan.price, plan.side === 'sell');
+        await repository.upsertGridLevel(plan.levelIndex, plan.price, plan.side === 'sell');
 
-      await repository.createOrderRecord({
-        exchangeId: createdOrder.id,
-        symbol: createdOrder.symbol,
-        side: plan.side === 'buy' ? OrderSide.BUY : OrderSide.SELL,
-        price: createdOrder.price,
-        amount: createdOrder.amount,
-        gridLevelId: plan.levelIndex,
-        status: OrderStatus.OPEN,
-      });
+        await repository.createOrderRecord({
+          exchangeId: createdOrder.id,
+          symbol: createdOrder.symbol,
+          side: plan.side === 'buy' ? OrderSide.BUY : OrderSide.SELL,
+          price: createdOrder.price,
+          amount: createdOrder.amount,
+          gridLevelId: plan.levelIndex,
+          status: OrderStatus.OPEN,
+        });
+      } catch (err: any) {
+        if (isInsufficientFundsError(err)) {
+          console.warn(`[Seeding Insufficient Funds Alert] 🚨 Binance rechazó orden de siembra por saldo insuficiente (-2010). Disparando Alerta de Sed e Inyección de Emergencia...`);
+          await checkAndExecuteAutoInjection(true);
+        } else {
+          console.error(`[Seeding Order Error] Error al crear orden de siembra:`, err.message || err);
+        }
+      }
     }
 
     console.log(`[Seeding] 🚀 Siembra inicial completada: ${seedPlans.length} órdenes límite guardadas en PostgreSQL.`);
@@ -358,25 +376,34 @@ async function main() {
 
     const newSeedPlans = gridManager.generateSeedOrders(latestTicker.last, holdingCostBasis);
     for (const plan of newSeedPlans) {
-      const createdOrder = await exchangeAdapter.createOrder({
-        symbol,
-        type: 'limit',
-        side: plan.side,
-        amount: plan.amount,
-        price: plan.price,
-      });
+      try {
+        const createdOrder = await exchangeAdapter.createOrder({
+          symbol,
+          type: 'limit',
+          side: plan.side,
+          amount: plan.amount,
+          price: plan.price,
+        });
 
-      await repository.upsertGridLevel(plan.levelIndex, plan.price, plan.side === 'sell');
+        await repository.upsertGridLevel(plan.levelIndex, plan.price, plan.side === 'sell');
 
-      await repository.createOrderRecord({
-        exchangeId: createdOrder.id,
-        symbol: createdOrder.symbol,
-        side: plan.side === 'buy' ? OrderSide.BUY : OrderSide.SELL,
-        price: createdOrder.price,
-        amount: createdOrder.amount,
-        gridLevelId: plan.levelIndex,
-        status: OrderStatus.OPEN,
-      });
+        await repository.createOrderRecord({
+          exchangeId: createdOrder.id,
+          symbol: createdOrder.symbol,
+          side: plan.side === 'buy' ? OrderSide.BUY : OrderSide.SELL,
+          price: createdOrder.price,
+          amount: createdOrder.amount,
+          gridLevelId: plan.levelIndex,
+          status: OrderStatus.OPEN,
+        });
+      } catch (err: any) {
+        if (isInsufficientFundsError(err)) {
+          console.warn(`[Rebalance Insufficient Funds Alert] 🚨 Binance rechazó orden re-sembrada por saldo insuficiente (-2010). Disparando Alerta de Sed...`);
+          await checkAndExecuteAutoInjection(true);
+        } else {
+          console.error(`[Rebalance Order Error] Error al crear orden re-sembrada:`, err.message || err);
+        }
+      }
     }
 
     console.log(`[Rebalance Complete] ✨ Grilla Re-ajustada: Nuevo rango $${rebalanced.newLowerPrice.toFixed(2)} - $${rebalanced.newUpperPrice.toFixed(2)} USD (${newSeedPlans.length} órdenes re-sembradas con Inventory Cost Guard).\n`);

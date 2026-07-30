@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import Decimal from 'decimal.js';
 import { ShadowExchangeAdapter } from './shadowAdapter';
+import { isInsufficientFundsError } from './adapter';
 
 describe('ShadowExchangeAdapter - Real-Time Shadow Trading Simulation', () => {
   const config = {
@@ -51,5 +52,13 @@ describe('ShadowExchangeAdapter - Real-Time Shadow Trading Simulation', () => {
     // Ticker que supera el precio de venta ($66,000 USD)
     adapter.processPriceTick(new Decimal(66100), 'BTC/USDT');
     expect(fillSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('debe identificar correctamente errores de Insufficient Funds (-2010) de Binance', () => {
+    const binanceError = new Error('binance {"code":-2010,"msg":"Account has insufficient balance for requested action."}');
+    expect(isInsufficientFundsError(binanceError)).toBe(true);
+
+    const genericError = new Error('Network timeout');
+    expect(isInsufficientFundsError(genericError)).toBe(false);
   });
 });
