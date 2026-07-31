@@ -22,8 +22,12 @@ export default function DashboardPage() {
     minGridRange: 63000,
     maxGridRange: 66000,
     btcBalance: 0,
-    usdtBalance: 1000,
-    gridInvestmentUsd: 1000,
+    usdtBalance: 2000,
+    gridInvestmentUsd: 2000,
+    lifetimeAllocationUsd: 2000,
+    maxLifetimeAllocationUsd: 2000,
+    autoInjectCooldownDays: 20,
+    lastInjectionDate: null,
   });
 
   const [gridLevels, setGridLevels] = useState<any[]>([]);
@@ -41,8 +45,8 @@ export default function DashboardPage() {
       ]);
 
       setStats(newStats);
-      if (newLadder.length > 0) setGridLevels(newLadder);
-      setFlips(newFlips);
+      if (newLadder && newLadder.length > 0) setGridLevels(newLadder);
+      if (newFlips) setFlips(newFlips);
     } catch (err) {
       console.error('Error refreshing dashboard data:', err);
     } finally {
@@ -65,10 +69,10 @@ export default function DashboardPage() {
       <div className="bg-slate-900/90 border border-slate-800 p-2.5 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-slate-300 font-medium">Túnel SSH AWS Activo (`localhost:5433` ➔ AWS EC2 `100.27.216.84`)</span>
+          <span className="text-slate-300 font-medium">Túnel SSH AWS Activo (`localhost:5433` ➔ AWS EC2 Estática `3.95.108.69`)</span>
         </div>
         <code className="bg-slate-950 px-3 py-1 rounded text-cyan-300 font-mono select-all border border-slate-800">
-          ssh -i ./Downloads/trading-bot-key.pem -N -L 5433:localhost:5432 ubuntu@100.27.216.84
+          ssh -i ./Downloads/trading-bot-key.pem -N -L 5433:localhost:5432 ubuntu@3.95.108.69
         </code>
       </div>
 

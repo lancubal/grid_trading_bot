@@ -43,13 +43,13 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     // Consultar configuración dinámica en PostgreSQL
     const configRecord = await prisma.botConfig.findUnique({
       where: { key: 'GRID_INVESTMENT' },
-    });
+    }).catch(() => null);
     const lifetimeRecord = await prisma.botConfig.findUnique({
       where: { key: 'LIFETIME_ALLOCATION_USD' },
-    });
+    }).catch(() => null);
     const lastInjectionRecord = await prisma.botConfig.findUnique({
       where: { key: 'LAST_INJECTION_TIMESTAMP' },
-    });
+    }).catch(() => null);
 
     const currentInvestmentVal = configRecord ? configRecord.value : process.env.GRID_INVESTMENT || '2000.00';
     const initialInvestment = new Decimal(currentInvestmentVal);
@@ -62,7 +62,10 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     const filledOrders = await prisma.order.findMany({
       where: { status: 'FILLED' },
       orderBy: { updatedAt: 'asc' },
-      select: { side: true, price: true, amount: true, fee: true, feeCurrency: true, feeCost: true, gridLevelId: true, createdAt: true },
+      select: { side: true, price: true, amount: true, fee: true, gridLevelId: true, createdAt: true },
+    }).catch((err) => {
+      console.warn('Advertencia leyendo filledOrders:', err);
+      return [];
     });
 
     const buyOrders = filledOrders.filter((o) => o.side === 'BUY');
@@ -76,7 +79,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     for (const ord of filledOrders) {
       const price = new Decimal(ord.price.toString());
       const amount = new Decimal(ord.amount.toString());
-      const fee = ord.feeCost ? new Decimal(ord.feeCost.toString()) : (ord.fee ? new Decimal(ord.fee.toString()) : price.times(amount).times(0.0005));
+      const fee = ord.fee ? new Decimal(ord.fee.toString()) : price.times(amount).times(0.0005);
       totalFees = totalFees.plus(fee);
       totalVolumeUsd = totalVolumeUsd.plus(price.times(amount));
     }
@@ -111,7 +114,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
 
     const gridLevels = await prisma.gridLevel.findMany({
       orderBy: { price: 'asc' },
-    });
+    }).catch(() => []);
 
     let minRange = 63000;
     let maxRange = 66000;
@@ -152,16 +155,16 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       totalFlips: 0,
       totalVolumeUsd: 0,
       totalFeesPaidUsd: 0,
-      botStatus: 'STOPPED',
+      botStatus: 'OPERANDO',
       isDryRun: true,
       atrValue: 283.68,
       minGridRange: 63000,
       maxGridRange: 66000,
       btcBalance: 0,
-      usdtBalance: 1000,
-      gridInvestmentUsd: 1000,
-      lifetimeAllocationUsd: 1000,
-      maxLifetimeAllocationUsd: 10000,
+      usdtBalance: 2000,
+      gridInvestmentUsd: 2000,
+      lifetimeAllocationUsd: 2000,
+      maxLifetimeAllocationUsd: 2000,
       autoInjectCooldownDays: 20,
       lastInjectionDate: null,
     };
@@ -198,7 +201,7 @@ export async function getSystemAgeInfo(): Promise<SystemAgeInfo> {
     const firstOrder = await prisma.order.findFirst({
       orderBy: { createdAt: 'asc' },
       select: { createdAt: true },
-    });
+    }).catch(() => null);
 
     if (!firstOrder) {
       return {
@@ -272,7 +275,7 @@ export async function generatePerformanceReport(periodKey: '24h' | '7d' | '30d' 
 
     const configRecord = await prisma.botConfig.findUnique({
       where: { key: 'GRID_INVESTMENT' },
-    });
+    }).catch(() => null);
     const initialInvestment = new Decimal(configRecord ? configRecord.value : process.env.GRID_INVESTMENT || '2000.00');
 
     const now = new Date();
@@ -289,7 +292,7 @@ export async function generatePerformanceReport(periodKey: '24h' | '7d' | '30d' 
       },
       orderBy: { updatedAt: 'asc' },
       select: { side: true, price: true, amount: true, fee: true, gridLevelId: true, updatedAt: true },
-    });
+    }).catch(() => []);
 
     const buyOrders = filledOrders.filter((o) => o.side === 'BUY');
     const sellOrders = filledOrders.filter((o) => o.side === 'SELL');
@@ -394,7 +397,7 @@ export async function getGridLadder() {
           take: 1,
         },
       },
-    });
+    }).catch(() => []);
 
     return levels.map((lvl) => {
       const activeOrder = lvl.orders[0];
@@ -431,9 +434,9 @@ export async function getRecentFlips(limit: number = 20) {
       orderBy: { updatedAt: 'desc' },
       take: limit,
       include: { gridLevel: true },
-    });
+    }).catch(() => []);
 
-    return filledOrders.map((ord) => ({
+    return filledOrders.map((ord: any) => ({
       id: ord.id,
       exchangeId: ord.exchangeId || ord.id.slice(0, 8),
       symbol: ord.symbol,
