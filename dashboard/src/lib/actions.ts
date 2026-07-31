@@ -51,18 +51,18 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       where: { key: 'LAST_INJECTION_TIMESTAMP' },
     });
 
-    const currentInvestmentVal = configRecord ? configRecord.value : process.env.GRID_INVESTMENT || '1000.00';
+    const currentInvestmentVal = configRecord ? configRecord.value : process.env.GRID_INVESTMENT || '2000.00';
     const initialInvestment = new Decimal(currentInvestmentVal);
     const lifetimeAllocationVal = lifetimeRecord ? lifetimeRecord.value : currentInvestmentVal;
     const lifetimeAllocation = new Decimal(lifetimeAllocationVal);
 
-    const maxLifetimeAllocationVal = process.env.MAX_LIFETIME_ALLOCATION_USD || '10000.00';
+    const maxLifetimeAllocationVal = process.env.MAX_LIFETIME_ALLOCATION_USD || '2000.00';
     const cooldownDaysVal = parseInt(process.env.AUTO_INJECT_COOLDOWN_DAYS || '20', 10);
 
     const filledOrders = await prisma.order.findMany({
       where: { status: 'FILLED' },
       orderBy: { updatedAt: 'asc' },
-      select: { side: true, price: true, amount: true, fee: true, gridLevelId: true, createdAt: true },
+      select: { side: true, price: true, amount: true, fee: true, feeCurrency: true, feeCost: true, gridLevelId: true, createdAt: true },
     });
 
     const buyOrders = filledOrders.filter((o) => o.side === 'BUY');
@@ -76,7 +76,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     for (const ord of filledOrders) {
       const price = new Decimal(ord.price.toString());
       const amount = new Decimal(ord.amount.toString());
-      const fee = ord.fee ? new Decimal(ord.fee.toString()) : price.times(amount).times(0.0005);
+      const fee = ord.feeCost ? new Decimal(ord.feeCost.toString()) : (ord.fee ? new Decimal(ord.fee.toString()) : price.times(amount).times(0.0005));
       totalFees = totalFees.plus(fee);
       totalVolumeUsd = totalVolumeUsd.plus(price.times(amount));
     }
@@ -273,7 +273,7 @@ export async function generatePerformanceReport(periodKey: '24h' | '7d' | '30d' 
     const configRecord = await prisma.botConfig.findUnique({
       where: { key: 'GRID_INVESTMENT' },
     });
-    const initialInvestment = new Decimal(configRecord ? configRecord.value : process.env.GRID_INVESTMENT || '1000.00');
+    const initialInvestment = new Decimal(configRecord ? configRecord.value : process.env.GRID_INVESTMENT || '2000.00');
 
     const now = new Date();
     let periodStart = new Date();
@@ -390,7 +390,7 @@ export async function getGridLadder() {
       orderBy: { price: 'desc' },
       include: {
         orders: {
-          where: { status: 'OPEN' },
+          where: { status: { in: ['OPEN', 'PENDING'] } },
           take: 1,
         },
       },
@@ -441,6 +441,8 @@ export async function getRecentFlips(limit: number = 20) {
       price: Number(ord.price),
       amount: Number(ord.amount),
       fee: ord.fee ? Number(ord.fee) : Number(ord.price) * Number(ord.amount) * 0.0005,
+      feeCurrency: ord.feeCurrency || 'USDT',
+      feeCost: ord.feeCost ? Number(ord.feeCost) : null,
       netGain: Number(ord.price) * 0.0033 * 0.0011,
       gridLevelIndex: ord.gridLevelId,
       updatedAt: ord.updatedAt.toISOString(),

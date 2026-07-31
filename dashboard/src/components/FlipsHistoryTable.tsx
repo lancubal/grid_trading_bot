@@ -11,6 +11,8 @@ interface FlipItem {
   price: number;
   amount: number;
   fee: number;
+  feeCurrency?: string;
+  feeCost?: number | null;
   netGain: number;
   gridLevelIndex: number;
   updatedAt: string;
@@ -83,7 +85,7 @@ export function FlipsHistoryTable({ flips }: FlipsHistoryTableProps) {
               <th className="py-2.5 px-3">Operación</th>
               <th className="py-2.5 px-3">Precio Ejecutado</th>
               <th className="py-2.5 px-3">Monto (BTC)</th>
-              <th className="py-2.5 px-3">Maker Fee (USD)</th>
+              <th className="py-2.5 px-3">Comisión Real (Fee)</th>
               <th className="py-2.5 px-3 text-right">Ganancia Neta</th>
             </tr>
           </thead>
@@ -97,6 +99,11 @@ export function FlipsHistoryTable({ flips }: FlipsHistoryTableProps) {
             ) : (
               filteredFlips.map((flip) => {
                 const isBuy = flip.side === 'BUY';
+                const isBnb = flip.feeCurrency?.toUpperCase() === 'BNB';
+                const feeDisplay = flip.feeCost !== undefined && flip.feeCost !== null
+                  ? `${flip.feeCost.toFixed(6)} ${flip.feeCurrency || 'BNB'}`
+                  : `$${flip.fee.toFixed(4)}`;
+
                 return (
                   <tr key={flip.id} className="hover:bg-slate-800/30 transition-colors">
                     <td className="py-2.5 px-3 text-slate-300 font-bold">{flip.exchangeId}</td>
@@ -117,7 +124,9 @@ export function FlipsHistoryTable({ flips }: FlipsHistoryTableProps) {
                     </td>
                     <td className="py-2.5 px-3 text-white font-bold">${flip.price.toFixed(2)}</td>
                     <td className="py-2.5 px-3 text-slate-300">{flip.amount.toFixed(4)} BTC</td>
-                    <td className="py-2.5 px-3 text-amber-400">${flip.fee.toFixed(4)}</td>
+                    <td className="py-2.5 px-3 text-amber-400 font-bold">
+                      {feeDisplay} {isBnb && <span className="text-[10px] text-emerald-400 font-normal">(-25%)</span>}
+                    </td>
                     <td className="py-2.5 px-3 text-right font-bold text-emerald-400">
                       +${flip.netGain.toFixed(4)} USD
                     </td>
