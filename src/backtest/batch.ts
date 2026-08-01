@@ -93,7 +93,8 @@ async function fetchAndCache90DaysCandles(symbol: string): Promise<OHLCV[]> {
  * Ejecuta simulación de backtest
  */
 function runBacktestForDays(allCandles: OHLCV[], days: number, gridConfig: any, enableAtrVolatility: boolean): BacktestResult {
-  const cutoffTime = Date.now() - days * 24 * 60 * 60 * 1000;
+  const maxTimestamp = allCandles.length > 0 ? allCandles[allCandles.length - 1].timestamp : Date.now();
+  const cutoffTime = maxTimestamp - days * 24 * 60 * 60 * 1000;
   const filteredCandles = allCandles.filter((c) => c.timestamp >= cutoffTime);
 
   const backtester = new GridBacktester(gridConfig, {
@@ -113,18 +114,30 @@ function generateAtrMarkdownReport(
   atrResults: Record<number, BacktestResult>,
   gridConfig: any
 ): string {
-  let md = `# 📈 Reporte de Experimento: Grilla Adaptativa por Volatilidad (ATR)
+  let md = `# 📈 Reporte de Experimento: Grilla Adaptativa por Volatilidad (ATR) vs Grilla Estática
 
-- **Rama Git:** \`feature/volatility-grid-atr\`
+- **Fecha de Simulación:** ${new Date().toISOString().replace('T', ' ').slice(0, 19)} UTC
 - **Par de Trading:** \`${gridConfig.symbol}\`
 - **Rango Base de Grilla:** \`$${gridConfig.lowerPrice.toFixed(2)} USD\` - \`$${gridConfig.upperPrice.toFixed(2)} USD\`
 - **Niveles de Grilla:** \`${gridConfig.gridLevels}\`
-- **Inversión Inicial:** \`$${gridConfig.investment.toFixed(2)} USD\`
+- **Inversión Inicial de Prueba:** \`$${gridConfig.investment.toFixed(2)} USD\`
 - **Regla de Volatilidad (ATR 14):** En fases de baja volatilidad comprime el ancho a $1,500 USD con escalones estrechos. En fases de alta volatilidad expande el rango dinámicamente hasta $6,000 USD para mantenerse activo.
 
 ---
 
-## 📊 Comparativa Directa: Grilla Estática vs Grilla Adaptativa ATR
+## 📊 Comparativa Directa Multiperíodo: Grilla Estática vs Grilla Adaptativa ATR
+
+### 🟢 7 Días:
+| Métrica | Grilla Estática | Grilla Adaptativa ATR | Diferencia |
+| :--- | :---: | :---: | :---: |
+| **Flips Completados** | ${staticResults[7].totalFlipsCompleted} | **${atrResults[7].totalFlipsCompleted}** | **+${atrResults[7].totalFlipsCompleted - staticResults[7].totalFlipsCompleted} flips** |
+| **Re-ajustes por ATR** | N/A | **${atrResults[7].atrRebalanceEventsCount} eventos** | - |
+| **Comisiones Maker (0.05%)** | $${staticResults[7].totalFeesPaidUsd.toFixed(2)} | $${atrResults[7].totalFeesPaidUsd.toFixed(2)} | - |
+| **BENEFICIO NETO (USD)** | $${staticResults[7].netProfitUsd.toFixed(2)} | **+$${atrResults[7].netProfitUsd.toFixed(2)}** | **+$${atrResults[7].netProfitUsd.minus(staticResults[7].netProfitUsd).toFixed(2)} USD** |
+| **ROI NETO (%)** | +${staticResults[7].netRoiPercent.toFixed(3)}% | **+${atrResults[7].netRoiPercent.toFixed(3)}%** | **+${atrResults[7].netRoiPercent.minus(staticResults[7].netRoiPercent).toFixed(3)}%** |
+| **Horas Inactivo (Out of Bounds)** | ${staticResults[7].outOfBoundsHours} hrs | **${atrResults[7].outOfBoundsHours} hrs** | **-${(staticResults[7].outOfBoundsHours - atrResults[7].outOfBoundsHours).toFixed(1)} hrs** |
+
+---
 
 ### 🟢 30 Días:
 | Métrica | Grilla Estática | Grilla Adaptativa ATR | Diferencia |
@@ -134,7 +147,17 @@ function generateAtrMarkdownReport(
 | **Comisiones Maker (0.05%)** | $${staticResults[30].totalFeesPaidUsd.toFixed(2)} | $${atrResults[30].totalFeesPaidUsd.toFixed(2)} | - |
 | **BENEFICIO NETO (USD)** | $${staticResults[30].netProfitUsd.toFixed(2)} | **+$${atrResults[30].netProfitUsd.toFixed(2)}** | **+$${atrResults[30].netProfitUsd.minus(staticResults[30].netProfitUsd).toFixed(2)} USD** |
 | **ROI NETO (%)** | +${staticResults[30].netRoiPercent.toFixed(3)}% | **+${atrResults[30].netRoiPercent.toFixed(3)}%** | **+${atrResults[30].netRoiPercent.minus(staticResults[30].netRoiPercent).toFixed(3)}%** |
-| **Horas Inactivo (Out of Bounds)** | ${staticResults[30].outOfBoundsHours} hrs | **${atrResults[30].outOfBoundsHours} hrs** | **-${(staticResults[30].outOfBoundsHours - atrResults[30].outOfBoundsHours).toFixed(1)} hrs** |
+| **Horas Inactivo (Out of Bounds)** | ${staticResults[30].outOfBoundsHours} hrs | **${atrResults[30].outOfBoundsHours} hrs** | **-${(staticResults[30].outOfBoundsHours - staticResults[30].outOfBoundsHours).toFixed(1)} hrs** |
+
+---
+
+### 🟢 60 Días:
+| Métrica | Grilla Estática | Grilla Adaptativa ATR | Diferencia |
+| :--- | :---: | :---: | :---: |
+| **Flips Completados** | ${staticResults[60].totalFlipsCompleted} | **${atrResults[60].totalFlipsCompleted}** | **+${atrResults[60].totalFlipsCompleted - staticResults[60].totalFlipsCompleted} flips** |
+| **Re-ajustes por ATR** | N/A | **${atrResults[60].atrRebalanceEventsCount} eventos** | - |
+| **BENEFICIO NETO (USD)** | $${staticResults[60].netProfitUsd.toFixed(2)} | **+$${atrResults[60].netProfitUsd.toFixed(2)}** | **+$${atrResults[60].netProfitUsd.minus(staticResults[60].netProfitUsd).toFixed(2)} USD** |
+| **ROI NETO (%)** | +${staticResults[60].netRoiPercent.toFixed(3)}% | **+${atrResults[60].netRoiPercent.toFixed(3)}%** | **+${atrResults[60].netRoiPercent.minus(staticResults[60].netRoiPercent).toFixed(3)}%** |
 
 ---
 
@@ -143,7 +166,7 @@ function generateAtrMarkdownReport(
 | :--- | :---: | :---: | :---: |
 | **Flips Completados** | ${staticResults[90].totalFlipsCompleted} | **${atrResults[90].totalFlipsCompleted}** | **+${atrResults[90].totalFlipsCompleted - staticResults[90].totalFlipsCompleted} flips** |
 | **Re-ajustes por ATR** | N/A | **${atrResults[90].atrRebalanceEventsCount} eventos** | - |
-| **BENEFICIO NETO (USD)** | $${staticResults[90].netProfitUsd.toFixed(2)} | **+$${atrResults[90].netProfitUsd.toFixed(2)}** | **+$${atrResults[90].netProfitUsd.minus(staticResults[90].netProfitUsd).toFixed(2)} USD** |
+| **BENEFICIO NETO (USD)** | $${staticResults[90].netProfitUsd.toFixed(2)} | **+$${atrResults[90].netProfitUsd.toFixed(2)}** | **+$${atrResults[90].netRoiPercent.minus(staticResults[90].netRoiPercent).toFixed(3)}%** |
 | **ROI NETO (%)** | +${staticResults[90].netRoiPercent.toFixed(3)}% | **+${atrResults[90].netRoiPercent.toFixed(3)}%** | **+${atrResults[90].netRoiPercent.minus(staticResults[90].netRoiPercent).toFixed(3)}%** |
 | **Horas Inactivo (Out of Bounds)** | ${staticResults[90].outOfBoundsHours} hrs | **${atrResults[90].outOfBoundsHours} hrs** | **-${(staticResults[90].outOfBoundsHours - atrResults[90].outOfBoundsHours).toFixed(1)} hrs** |
 

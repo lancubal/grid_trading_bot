@@ -379,34 +379,25 @@ async function main() {
     }
   }
 
-  // 10. Reacción al Evento VOLATILITY_CHANGE: Cancelar órdenes virtuales y re-dibujar 15 escalones con Inventory Cost Guard
-  volatilityEngine.on('VOLATILITY_CHANGE', async (newAtr: Decimal) => {
-    // Si el cortacircuitos está activado, suspender re-ajustes de grilla
+  // 10. Función reutilizable de Rebalance de Grilla
+  const performGridRebalance = async (newAtr: Decimal, targetPrice?: Decimal) => {
     if (circuitBreaker.getStatus().isTripped) {
       console.warn(`[Rebalance Suspended] 🛑 Re-ajuste por volatilidad ATR pausado temporalmente por Cortacircuitos activo.`);
       return;
     }
 
     const latestTicker = await exchangeAdapter.fetchTicker(symbol);
+    const centerPrice = targetPrice ?? latestTicker.last;
     const highestGridLevel = gridManager.getConfig().upperPrice;
 
     // Evaluaciones de Bloqueo FOMO (Escudo Anti-Comprar la Cima de un Pump)
-    const fomoCheck = fomoGuard.checkFomoRisk(latestTicker.last, highestGridLevel);
+    const fomoCheck = fomoGuard.checkFomoRisk(centerPrice, highestGridLevel);
     if (fomoCheck.isBlocked) {
       console.warn(`[FomoGuard Trigger] 🛑 ${fomoCheck.message}`);
-      if (fomoCheck.justBlocked && fomoCheck.message) {
-        await notifier.notifyOrderExecution({
-          side: 'SELL',
-          symbol,
-          amount: 0,
-          price: latestTicker.last,
-          netProfitUsd: 0,
-        });
-      }
       return;
     }
 
-    console.log(`\n[Rebalance Trigger] ⚡ Evento VOLATILITY_CHANGE Recibido (Nuevo ATR: $${newAtr.toFixed(2)} USD). Re-ajustando grilla...`);
+    console.log(`\n[Rebalance Trigger] ⚡ Re-ajustando grilla en torno al precio $${centerPrice.toFixed(2)} USD (ATR: $${newAtr.toFixed(2)} USD)...`);
 
     // Obtener los costos de compra del inventario retenido antes de cancelar
     const currentOpenOrders = await repository.getOpenOrders();
@@ -424,13 +415,13 @@ async function main() {
 
     const rebalanced = gridManager.adjustToVolatility(
       newAtr,
-      latestTicker.last,
+      centerPrice,
       4.0,
       env.MIN_GRID_RANGE_USD.toNumber(),
       env.MAX_GRID_RANGE_USD.toNumber()
     );
 
-    const newSeedPlans = gridManager.generateSeedOrders(latestTicker.last, holdingCostBasis);
+    const newSeedPlans = gridManager.generateSeedOrders(centerPrice, holdingCostBasis);
     for (const plan of newSeedPlans) {
       try {
         const createdOrder = await exchangeAdapter.createOrder({
@@ -463,16 +454,23 @@ async function main() {
     }
 
     console.log(`[Rebalance Complete] ✨ Grilla Re-ajustada: Nuevo rango $${rebalanced.newLowerPrice.toFixed(2)} - $${rebalanced.newUpperPrice.toFixed(2)} USD (${newSeedPlans.length} órdenes re-sembradas con Inventory Cost Guard).\n`);
+  };
+
+  volatilityEngine.on('VOLATILITY_CHANGE', async (newAtr: Decimal) => {
+    await performGridRebalance(newAtr);
   });
 
   await volatilityEngine.start(symbol, env.ATR_TIMEFRAME, env.ATR_PERIOD);
 
-  // 11. Bucle de Tickers de Mercado en Vivo con Monitoreo Periódico de Autodefensa y Cortacircuitos
+  // 11. Bucle de Tickers de Mercado en Vivo con Monitoreo Periódico de Autodefensa, Cortacircuitos y Recentrado Out-of-Bounds
   console.log('====================================================');
-  console.log('🟢 BOT OPERANDO EN TIEMPO REAL CON CORTACIRCUITOS Y BLOQUEO FOMO');
+  console.log('🟢 BOT OPERANDO EN TIEMPO REAL CON RECENTRADO DINÁMICO OUT-OF-BOUNDS');
   console.log('====================================================');
 
   let tickCount = 0;
+  let lastOobRebalanceTime = 0;
+  const OOB_REBALANCE_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutos de cooldown entre recentrados por fuera de rango
+
   const tickerInterval = setInterval(async () => {
     try {
       const ticker = await exchangeAdapter.fetchTicker(symbol);
@@ -520,9 +518,18 @@ async function main() {
         await checkAndExecuteAutoInjection(false);
       }
 
+      // EVALUACIÓN DE OUT OF BOUNDS CON RECENTRADO AUTÓNOMO
       const isOutOfBounds = ticker.last.lessThan(gridManager.getConfig().lowerPrice) || ticker.last.greaterThan(gridManager.getConfig().upperPrice);
       if (isOutOfBounds) {
         console.warn(`[Market Alert] ⚠️ Precio actual ($${ticker.last.toFixed(2)}) fuera del rango ($${gridManager.getConfig().lowerPrice.toFixed(2)} - $${gridManager.getConfig().upperPrice.toFixed(2)})`);
+
+        const now = Date.now();
+        if (!circuitBreaker.getStatus().isTripped && !fomoGuard.getStatus().isBlocked && (now - lastOobRebalanceTime >= OOB_REBALANCE_COOLDOWN_MS)) {
+          lastOobRebalanceTime = now;
+          console.log(`[OOB Auto-Recenter] 🔄 Forzando recentrado dinámico de grilla alrededor de $${ticker.last.toFixed(2)} USD...`);
+          const currentAtr = volatilityEngine.getCurrentAtr() || initialAtr;
+          await performGridRebalance(currentAtr, ticker.last);
+        }
       }
     } catch (err) {
       console.error('[Ticker Loop Error]', err);

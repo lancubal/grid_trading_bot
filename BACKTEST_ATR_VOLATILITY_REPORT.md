@@ -1,36 +1,58 @@
-# 📈 Reporte de Experimento: Grilla Adaptativa por Volatilidad (ATR)
+# 📈 Reporte de Experimento: Grilla Adaptativa por Volatilidad (ATR) vs Grilla Estática
 
-- **Rama Git:** `feature/volatility-grid-atr`
+- **Fecha de Simulación:** 2026-08-01 13:42:27 UTC
 - **Par de Trading:** `BTC/USDT`
 - **Rango Base de Grilla:** `$63000.00 USD` - `$66000.00 USD`
 - **Niveles de Grilla:** `15`
-- **Inversión Inicial:** `$1000.00 USD`
+- **Inversión Inicial de Prueba:** `$2000.00 USD`
 - **Regla de Volatilidad (ATR 14):** En fases de baja volatilidad comprime el ancho a $1,500 USD con escalones estrechos. En fases de alta volatilidad expande el rango dinámicamente hasta $6,000 USD para mantenerse activo.
 
 ---
 
-## 📊 Comparativa Directa: Grilla Estática vs Grilla Adaptativa ATR
+## 📊 Comparativa Directa Multiperíodo: Grilla Estática vs Grilla Adaptativa ATR
+
+### 🟢 7 Días:
+| Métrica | Grilla Estática | Grilla Adaptativa ATR | Diferencia |
+| :--- | :---: | :---: | :---: |
+| **Flips Completados** | 83 | **294** | **+211 flips** |
+| **Re-ajustes por ATR** | N/A | **16 eventos** | - |
+| **Comisiones Maker (0.05%)** | $11.21 | $41.56 | - |
+| **BENEFICIO NETO (USD)** | $24.61 | **+$59.46** | **+$34.85 USD** |
+| **ROI NETO (%)** | +1.230% | **+2.973%** | **+1.743%** |
+| **Horas Inactivo (Out of Bounds)** | 10.97 hrs | **0 hrs** | **-11.0 hrs** |
+
+---
 
 ### 🟢 30 Días:
 | Métrica | Grilla Estática | Grilla Adaptativa ATR | Diferencia |
 | :--- | :---: | :---: | :---: |
-| **Flips Completados** | 203 | **2103** | **+1900 flips** |
-| **Re-ajustes por ATR** | N/A | **101 eventos** | - |
-| **Comisiones Maker (0.05%)** | $14.21 | $149.94 | - |
-| **BENEFICIO NETO (USD)** | $34.17 | **+$113.00** | **+$78.83 USD** |
-| **ROI NETO (%)** | +3.417% | **+11.300%** | **+7.883%** |
-| **Horas Inactivo (Out of Bounds)** | 379.7 hrs | **0 hrs** | **-379.7 hrs** |
+| **Flips Completados** | 204 | **130** | **+-74 flips** |
+| **Re-ajustes por ATR** | N/A | **106 eventos** | - |
+| **Comisiones Maker (0.05%)** | $28.42 | $18.78 | - |
+| **BENEFICIO NETO (USD)** | $66.71 | **+$100.22** | **+$33.51 USD** |
+| **ROI NETO (%)** | +3.336% | **+5.011%** | **+1.675%** |
+| **Horas Inactivo (Out of Bounds)** | 379.7 hrs | **0 hrs** | **-0.0 hrs** |
+
+---
+
+### 🟢 60 Días:
+| Métrica | Grilla Estática | Grilla Adaptativa ATR | Diferencia |
+| :--- | :---: | :---: | :---: |
+| **Flips Completados** | 357 | **194** | **+-163 flips** |
+| **Re-ajustes por ATR** | N/A | **261 eventos** | - |
+| **BENEFICIO NETO (USD)** | $119.54 | **+$29.03** | **+$-90.51 USD** |
+| **ROI NETO (%)** | +5.977% | **+1.452%** | **+-4.525%** |
 
 ---
 
 ### 🟢 90 Días:
 | Métrica | Grilla Estática | Grilla Adaptativa ATR | Diferencia |
 | :--- | :---: | :---: | :---: |
-| **Flips Completados** | 454 | **7490** | **+7036 flips** |
-| **Re-ajustes por ATR** | N/A | **334 eventos** | - |
-| **BENEFICIO NETO (USD)** | $75.74 | **+$311.27** | **+$235.53 USD** |
-| **ROI NETO (%)** | +7.574% | **+31.127%** | **+23.553%** |
-| **Horas Inactivo (Out of Bounds)** | 1568.35 hrs | **0.23 hrs** | **-1568.1 hrs** |
+| **Flips Completados** | 357 | **1012** | **+655 flips** |
+| **Re-ajustes por ATR** | N/A | **346 eventos** | - |
+| **BENEFICIO NETO (USD)** | $119.54 | **+$92.47** | **+$-1.353%** |
+| **ROI NETO (%)** | +5.977% | **+4.624%** | **+-1.353%** |
+| **Horas Inactivo (Out of Bounds)** | 1568.67 hrs | **0.23 hrs** | **-1568.4 hrs** |
 
 ---
 
