@@ -29,6 +29,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const priceLinesRef = useRef<any[]>([]);
+  const currentPriceLineRef = useRef<any>(null);
 
   // Ref estable para evitar re-inicializaciones del gráfico en re-renders del padre
   const onPriceUpdateRef = useRef(onPriceUpdate);
@@ -41,6 +42,33 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
   const [currentZoomLevel, setCurrentZoomLevel] = useState<'ZOOMED_IN' | 'ZOOMED_OUT'>('ZOOMED_OUT');
   const zoomLevelRef = useRef<'ZOOMED_IN' | 'ZOOMED_OUT'>('ZOOMED_OUT');
   const [activeOrdersCount, setActiveOrdersCount] = useState<number>(0);
+  const [lastSpotPrice, setLastSpotPrice] = useState<number | null>(null);
+
+  // Actualizar o crear la línea de Precio Actual en color Amarillo Ámbar brillante
+  const updateCurrentPriceLine = useCallback((price: number) => {
+    setLastSpotPrice(price);
+    const series = candlestickSeriesRef.current;
+    if (!series) return;
+
+    try {
+      if (!currentPriceLineRef.current) {
+        currentPriceLineRef.current = series.createPriceLine({
+          price,
+          color: '#fbbf24', // Amarillo Ámbar vibrante
+          lineWidth: 2 as LineWidth,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true, // Badge resplandeciente en la barra de escala a la derecha
+          title: 'PRECIO ACTUAL',
+        });
+      } else {
+        currentPriceLineRef.current.applyOptions({
+          price,
+        });
+      }
+    } catch (err) {
+      console.warn('Advertencia actualizando línea de precio actual:', err);
+    }
+  }, []);
 
   // Re-dibujar líneas de grilla según el Nivel de Detalle (LOD) de manera asíncrona segura
   const renderGridLines = useCallback(() => {
@@ -139,7 +167,6 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
               axisLabelVisible = true; // Badge con el precio exacto en la barra de escala a la derecha
             }
 
-            // Dejamos el title vacío para que NO dibuje cajas de texto sobre las velas más recientes
             const priceLine = series.createPriceLine({
               price: level.price,
               color,
@@ -178,12 +205,14 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
           }));
           series.setData(formatted);
           if (formatted.length > 0) {
-            onPriceUpdateRef.current(formatted[formatted.length - 1].close);
+            const latestClose = formatted[formatted.length - 1].close;
+            updateCurrentPriceLine(latestClose);
+            onPriceUpdateRef.current(latestClose);
           }
         }
       })
       .catch((err) => console.warn('Klines fetch warning:', err));
-  }, []);
+  }, [updateCurrentPriceLine]);
 
   // Inicializar Gráfico TradingView UNA SOLA VEZ al montar el componente
   useEffect(() => {
@@ -257,6 +286,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
             close: parseFloat(k.c),
           };
           candlestickSeries.update(candle);
+          updateCurrentPriceLine(candle.close);
           onPriceUpdateRef.current(candle.close);
         }
       } catch (err) {
@@ -279,7 +309,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
       ws.close();
       chart.remove();
     };
-  }, [fetchKlinesData]);
+  }, [fetchKlinesData, updateCurrentPriceLine]);
 
   // Al cambiar la temporalidad (1m, 5m, 15m, 1h), re-descargar datos
   const handleIntervalChange = (newInterval: CandleInterval) => {
@@ -300,13 +330,21 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
       {/* Header con Control de Renderizado por Nivel de Detalle (LOD) y Selector de Temporalidad */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
+          <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
           <h3 className="text-sm font-bold tracking-wide text-white uppercase flex items-center gap-2">
             Gráfico en Vivo BTC/USDT (Hasta 1,000 Velas)
           </h3>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-xs">
+          {/* Legend del Precio Actual Amarillo */}
+          {lastSpotPrice && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 font-mono text-[11px]">
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+              <span>Precio Spot: ${lastSpotPrice.toFixed(2)}</span>
+            </div>
+          )}
+
           {/* Selector de Temporalidad de Velas (1m, 5m, 15m, 1h) */}
           <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
             <Clock className="w-3.5 h-3.5 text-slate-400 ml-1" />
