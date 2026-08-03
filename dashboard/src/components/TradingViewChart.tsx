@@ -242,12 +242,16 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
       },
     });
 
+    // Desactivamos la etiqueta por defecto verde/roja de la serie (lastValueVisible & priceLineVisible)
+    // para evitar duplicados con nuestra línea amarilla de precio actual.
     const candlestickSeries = chart.addCandlestickSeries({
       upColor: '#10B981',
       downColor: '#EF4444',
       borderVisible: false,
       wickUpColor: '#10B981',
       wickDownColor: '#EF4444',
+      lastValueVisible: false, // Ocultar etiqueta por defecto verde/roja duplicada
+      priceLineVisible: false, // Ocultar línea por defecto duplicada
     });
 
     chartRef.current = chart;
