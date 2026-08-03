@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { createChart, IChartApi, ISeriesApi, LineStyle, LineWidth } from 'lightweight-charts';
-import { Eye, ZoomIn, ZoomOut } from 'lucide-react';
+import { Eye, ZoomIn, ZoomOut, Clock } from 'lucide-react';
 
 interface GridLevelItem {
   id: string;
@@ -22,6 +22,7 @@ interface TradingViewChartProps {
 }
 
 type LodMode = 'AUTO' | 'CHANNEL' | 'DETAILED';
+type CandleInterval = '1m' | '5m' | '15m' | '1h';
 
 export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -36,6 +37,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
   });
 
   const [lodMode, setLodMode] = useState<LodMode>('AUTO');
+  const [candleInterval, setCandleInterval] = useState<CandleInterval>('1m');
   const [currentZoomLevel, setCurrentZoomLevel] = useState<'ZOOMED_IN' | 'ZOOMED_OUT'>('ZOOMED_OUT');
   const zoomLevelRef = useRef<'ZOOMED_IN' | 'ZOOMED_OUT'>('ZOOMED_OUT');
   const [activeOrdersCount, setActiveOrdersCount] = useState<number>(0);
@@ -163,7 +165,32 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
     });
   }, [gridLevels, lodMode, currentZoomLevel]);
 
-  // Inicializar Gráfico TradingView UNA SOLA VEZ al montar el componente (sin recreaciones por re-renders)
+  // Cargar velas de Binance API (hasta 1,000 velas) segun la temporalidad seleccionada
+  const fetchKlinesData = useCallback((interval: CandleInterval) => {
+    const series = candlestickSeriesRef.current;
+    if (!series) return;
+
+    fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=1000`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) {
+          const formatted = data.map((c: any) => ({
+            time: Math.floor(c[0] / 1000) as any,
+            open: parseFloat(c[1]),
+            high: parseFloat(c[2]),
+            low: parseFloat(c[3]),
+            close: parseFloat(c[4]),
+          }));
+          series.setData(formatted);
+          if (formatted.length > 0) {
+            onPriceUpdateRef.current(formatted[formatted.length - 1].close);
+          }
+        }
+      })
+      .catch((err) => console.warn('Klines fetch warning:', err));
+  }, []);
+
+  // Inicializar Gráfico TradingView UNA SOLA VEZ al montar el componente
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
@@ -216,27 +243,10 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
       }
     });
 
-    // Cargar velas iniciales (Binance REST API)
-    fetch('https://api.binance.us/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=100')
-      .then((res) => res.json())
-      .then((data) => {
-        if (Array.isArray(data)) {
-          const formatted = data.map((c: any) => ({
-            time: Math.floor(c[0] / 1000) as any,
-            open: parseFloat(c[1]),
-            high: parseFloat(c[2]),
-            low: parseFloat(c[3]),
-            close: parseFloat(c[4]),
-          }));
-          candlestickSeries.setData(formatted);
-          if (formatted.length > 0) {
-            onPriceUpdateRef.current(formatted[formatted.length - 1].close);
-          }
-        }
-      })
-      .catch((err) => console.warn('Klines fetch warning:', err));
+    // Cargar 1,000 velas iniciales
+    fetchKlinesData('1m');
 
-    // Conectar a Binance WebSocket (1m kline)
+    // Conectar a Binance WebSocket dinámico
     const ws = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@kline_1m');
 
     ws.onmessage = (event) => {
@@ -274,7 +284,13 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
       ws.close();
       chart.remove();
     };
-  }, []); // Array de dependencias vacío: se instancia 1 sola vez en la vida del componente
+  }, [fetchKlinesData]);
+
+  // Al cambiar la temporalidad (1m, 5m, 15m, 1h), re-descargar datos
+  const handleIntervalChange = (newInterval: CandleInterval) => {
+    setCandleInterval(newInterval);
+    fetchKlinesData(newInterval);
+  };
 
   // Actualizar líneas cuando cambie la grilla o la configuración LOD
   useEffect(() => {
@@ -286,21 +302,39 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
 
   return (
     <div className="glass-panel p-4 rounded-xl space-y-3 border border-slate-800 bg-slate-900/60 shadow-xl">
-      {/* Header con Control de Renderizado por Nivel de Detalle (LOD) */}
+      {/* Header con Control de Renderizado por Nivel de Detalle (LOD) y Selector de Temporalidad */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
           <h3 className="text-sm font-bold tracking-wide text-white uppercase flex items-center gap-2">
-            Gráfico en Vivo BTC/USDT (LOD & Jerarquía de Opacidad)
+            Gráfico en Vivo BTC/USDT (Hasta 1,000 Velas)
           </h3>
         </div>
 
-        {/* Controles de Modo LOD (Auto / Canal / Detallado) */}
-        <div className="flex items-center gap-2 text-xs">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          {/* Selector de Temporalidad de Velas (1m, 5m, 15m, 1h) */}
+          <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+            <Clock className="w-3.5 h-3.5 text-slate-400 ml-1" />
+            {(['1m', '5m', '15m', '1h'] as CandleInterval[]).map((tf) => (
+              <button
+                key={tf}
+                onClick={() => handleIntervalChange(tf)}
+                className={`px-2 py-0.5 rounded text-xs font-mono font-semibold transition-all ${
+                  candleInterval === tf
+                    ? 'bg-cyan-500 text-slate-950 shadow-sm'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                {tf}
+              </button>
+            ))}
+          </div>
+
+          {/* Controles de Modo LOD (Auto / Canal / Detallado) */}
           <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
             <button
               onClick={() => setLodMode('AUTO')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold transition-all ${
+              className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold transition-all ${
                 lodMode === 'AUTO'
                   ? 'bg-slate-800 text-cyan-400 border border-slate-700'
                   : 'text-slate-400 hover:text-white'
@@ -311,32 +345,32 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
             </button>
             <button
               onClick={() => setLodMode('CHANNEL')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold transition-all ${
+              className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold transition-all ${
                 lodMode === 'CHANNEL'
                   ? 'bg-slate-800 text-purple-400 border border-slate-700'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
               <ZoomOut className="w-3 h-3" />
-              Canal Resumido
+              Canal
             </button>
             <button
               onClick={() => setLodMode('DETAILED')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold transition-all ${
+              className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold transition-all ${
                 lodMode === 'DETAILED'
                   ? 'bg-slate-800 text-emerald-400 border border-slate-700'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
               <ZoomIn className="w-3 h-3" />
-              Ver Escalones
+              Escalones
             </button>
           </div>
 
           <div className="hidden sm:flex items-center gap-3 text-[11px] bg-slate-950/60 px-3 py-1 rounded-lg border border-slate-800 font-mono text-slate-300">
             <span className="text-emerald-400 flex items-center gap-1">
               <span className="w-2 h-2 rounded-full bg-emerald-400" />
-              Órdenes Vivas: {activeOrdersCount}
+              Vivas: {activeOrdersCount}
             </span>
             <span className="text-slate-400 flex items-center gap-1">
               <span className="w-2 h-2 rounded-full bg-slate-600" />
