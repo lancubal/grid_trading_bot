@@ -31,125 +31,131 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
 
   const [lodMode, setLodMode] = useState<LodMode>('AUTO');
   const [currentZoomLevel, setCurrentZoomLevel] = useState<'ZOOMED_IN' | 'ZOOMED_OUT'>('ZOOMED_OUT');
+  const zoomLevelRef = useRef<'ZOOMED_IN' | 'ZOOMED_OUT'>('ZOOMED_OUT');
   const [activeOrdersCount, setActiveOrdersCount] = useState<number>(0);
 
-  // Re-dibujar líneas de grilla según el Nivel de Detalle (LOD)
+  // Re-dibujar líneas de grilla según el Nivel de Detalle (LOD) de manera asíncrona segura
   const renderGridLines = useCallback(() => {
-    if (!candlestickSeriesRef.current || gridLevels.length === 0) return;
+    requestAnimationFrame(() => {
+      if (!candlestickSeriesRef.current || gridLevels.length === 0) return;
 
-    // 1. Limpiar líneas anteriores
-    priceLinesRef.current.forEach((line) => {
-      try {
-        candlestickSeriesRef.current?.removePriceLine(line);
-      } catch (e) {}
-    });
-    priceLinesRef.current = [];
-
-    // Calcular min/max y promedios para Zonas
-    const sortedLevels = [...gridLevels].sort((a, b) => a.price - b.price);
-    const minPrice = sortedLevels[0].price;
-    const maxPrice = sortedLevels[sortedLevels.length - 1].price;
-
-    const sellLevels = sortedLevels.filter((l) => l.isHolding || l.activeOrder?.side === 'SELL');
-    const buyLevels = sortedLevels.filter((l) => !l.isHolding || l.activeOrder?.side === 'BUY');
-
-    const shouldShowChannelOnly =
-      lodMode === 'CHANNEL' || (lodMode === 'AUTO' && currentZoomLevel === 'ZOOMED_OUT');
-
-    if (shouldShowChannelOnly) {
-      // --- MODO CANAL RESUMIDO (Zoom Alejado: evita efecto código de barras) ---
-      // Linea Techo Máximo
-      const topBoundary = candlestickSeriesRef.current.createPriceLine({
-        price: maxPrice,
-        color: '#ef4444',
-        lineWidth: 2 as LineWidth,
-        lineStyle: LineStyle.Solid,
-        axisLabelVisible: true,
-        title: `TECHO GRILLA ($${maxPrice.toFixed(0)})`,
-      });
-      priceLinesRef.current.push(topBoundary);
-
-      // Linea Piso Mínimo
-      const bottomBoundary = candlestickSeriesRef.current.createPriceLine({
-        price: minPrice,
-        color: '#10b981',
-        lineWidth: 2 as LineWidth,
-        lineStyle: LineStyle.Solid,
-        axisLabelVisible: true,
-        title: `PISO GRILLA ($${minPrice.toFixed(0)})`,
-      });
-      priceLinesRef.current.push(bottomBoundary);
-
-      // Zona Promedio Venta
-      if (sellLevels.length > 0) {
-        const avgSell = sellLevels.reduce((acc, l) => acc + l.price, 0) / sellLevels.length;
-        const sellZoneLine = candlestickSeriesRef.current.createPriceLine({
-          price: avgSell,
-          color: 'rgba(239, 68, 68, 0.75)',
-          lineWidth: 1 as LineWidth,
-          lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: `ZONA DE VENTA (${sellLevels.length} Órdenes)`,
-        });
-        priceLinesRef.current.push(sellZoneLine);
-      }
-
-      // Zona Promedio Compra
-      if (buyLevels.length > 0) {
-        const avgBuy = buyLevels.reduce((acc, l) => acc + l.price, 0) / buyLevels.length;
-        const buyZoneLine = candlestickSeriesRef.current.createPriceLine({
-          price: avgBuy,
-          color: 'rgba(16, 185, 129, 0.75)',
-          lineWidth: 1 as LineWidth,
-          lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: `ZONA DE COMPRA (${buyLevels.length} Órdenes)`,
-        });
-        priceLinesRef.current.push(buyZoneLine);
-      }
-    } else {
-      // --- MODO DETALLADO (Zoom Cercano: Jerarquía de opacidad individual) ---
-      gridLevels.forEach((level) => {
-        const isActiveOrder = Boolean(level.activeOrder);
-        const isHolding = level.isHolding;
-
-        let color = '#475569'; // Gris fantasma para inactivas/históricas
-        let lineWidth: LineWidth = 1 as LineWidth;
-        let lineStyle = LineStyle.Dotted;
-        let axisLabelVisible = false;
-
-        if (isActiveOrder || isHolding) {
-          // Órdenes VIVAS esperándose en Binance: Colores sólidos y brillantes
-          if (isHolding || level.activeOrder?.side === 'SELL') {
-            color = '#ef4444'; // Rojo brillante Venta
-          } else {
-            color = '#10b981'; // Verde brillante Compra
+      // 1. Limpiar líneas anteriores con verificación de seguridad
+      priceLinesRef.current.forEach((line) => {
+        try {
+          if (candlestickSeriesRef.current) {
+            candlestickSeriesRef.current.removePriceLine(line);
           }
-          lineWidth = 2 as LineWidth;
-          lineStyle = LineStyle.Solid;
-          axisLabelVisible = true;
-        }
-
-        const title = isActiveOrder
-          ? `${level.activeOrder?.side === 'SELL' ? 'VENTA' : 'COMPRA'} #${level.levelIndex}`
-          : isHolding
-          ? `VENTA #${level.levelIndex}`
-          : `#${level.levelIndex}`;
-
-        const priceLine = candlestickSeriesRef.current?.createPriceLine({
-          price: level.price,
-          color,
-          lineWidth,
-          lineStyle,
-          axisLabelVisible,
-          title,
-        });
-
-        if (priceLine) {
-          priceLinesRef.current.push(priceLine);
+        } catch (e) {
+          // Captura silenciosa si el objeto ya fue desechado por la canvas
         }
       });
-    }
+      priceLinesRef.current = [];
+
+      // Calcular min/max y promedios para Zonas
+      const sortedLevels = [...gridLevels].sort((a, b) => a.price - b.price);
+      const minPrice = sortedLevels[0].price;
+      const maxPrice = sortedLevels[sortedLevels.length - 1].price;
+
+      const sellLevels = sortedLevels.filter((l) => l.isHolding || l.activeOrder?.side === 'SELL');
+      const buyLevels = sortedLevels.filter((l) => !l.isHolding || l.activeOrder?.side === 'BUY');
+
+      const shouldShowChannelOnly =
+        lodMode === 'CHANNEL' || (lodMode === 'AUTO' && currentZoomLevel === 'ZOOMED_OUT');
+
+      try {
+        if (shouldShowChannelOnly) {
+          // --- MODO CANAL RESUMIDO (Zoom Alejado: evita efecto código de barras) ---
+          const topBoundary = candlestickSeriesRef.current.createPriceLine({
+            price: maxPrice,
+            color: '#ef4444',
+            lineWidth: 2 as LineWidth,
+            lineStyle: LineStyle.Solid,
+            axisLabelVisible: true,
+            title: `TECHO GRILLA ($${maxPrice.toFixed(0)})`,
+          });
+          priceLinesRef.current.push(topBoundary);
+
+          const bottomBoundary = candlestickSeriesRef.current.createPriceLine({
+            price: minPrice,
+            color: '#10b981',
+            lineWidth: 2 as LineWidth,
+            lineStyle: LineStyle.Solid,
+            axisLabelVisible: true,
+            title: `PISO GRILLA ($${minPrice.toFixed(0)})`,
+          });
+          priceLinesRef.current.push(bottomBoundary);
+
+          if (sellLevels.length > 0) {
+            const avgSell = sellLevels.reduce((acc, l) => acc + l.price, 0) / sellLevels.length;
+            const sellZoneLine = candlestickSeriesRef.current.createPriceLine({
+              price: avgSell,
+              color: 'rgba(239, 68, 68, 0.75)',
+              lineWidth: 1 as LineWidth,
+              lineStyle: LineStyle.Dashed,
+              axisLabelVisible: true,
+              title: `ZONA DE VENTA (${sellLevels.length} Órdenes)`,
+            });
+            priceLinesRef.current.push(sellZoneLine);
+          }
+
+          if (buyLevels.length > 0) {
+            const avgBuy = buyLevels.reduce((acc, l) => acc + l.price, 0) / buyLevels.length;
+            const buyZoneLine = candlestickSeriesRef.current.createPriceLine({
+              price: avgBuy,
+              color: 'rgba(16, 185, 129, 0.75)',
+              lineWidth: 1 as LineWidth,
+              lineStyle: LineStyle.Dashed,
+              axisLabelVisible: true,
+              title: `ZONA DE COMPRA (${buyLevels.length} Órdenes)`,
+            });
+            priceLinesRef.current.push(buyZoneLine);
+          }
+        } else {
+          // --- MODO DETALLADO (Zoom Cercano: Jerarquía de opacidad individual) ---
+          gridLevels.forEach((level) => {
+            const isActiveOrder = Boolean(level.activeOrder);
+            const isHolding = level.isHolding;
+
+            let color = '#475569';
+            let lineWidth: LineWidth = 1 as LineWidth;
+            let lineStyle = LineStyle.Dotted;
+            let axisLabelVisible = false;
+
+            if (isActiveOrder || isHolding) {
+              if (isHolding || level.activeOrder?.side === 'SELL') {
+                color = '#ef4444';
+              } else {
+                color = '#10b981';
+              }
+              lineWidth = 2 as LineWidth;
+              lineStyle = LineStyle.Solid;
+              axisLabelVisible = true;
+            }
+
+            const title = isActiveOrder
+              ? `${level.activeOrder?.side === 'SELL' ? 'VENTA' : 'COMPRA'} #${level.levelIndex}`
+              : isHolding
+              ? `VENTA #${level.levelIndex}`
+              : `#${level.levelIndex}`;
+
+            const priceLine = candlestickSeriesRef.current?.createPriceLine({
+              price: level.price,
+              color,
+              lineWidth,
+              lineStyle,
+              axisLabelVisible,
+              title,
+            });
+
+            if (priceLine) {
+              priceLinesRef.current.push(priceLine);
+            }
+          });
+        }
+      } catch (err) {
+        console.warn('Error seguro actualizando líneas de precio:', err);
+      }
+    });
   }, [gridLevels, lodMode, currentZoomLevel]);
 
   useEffect(() => {
@@ -191,15 +197,18 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
     chartRef.current = chart;
     candlestickSeriesRef.current = candlestickSeries;
 
-    // Detectar Zoom para cambiar automáticamente entre Canal Resumido y Escalones Detallados
+    // Detectar Zoom SIN bucles de re-renderizado ni colisiones de RAF
     chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (!range) return;
       const barsCount = range.to - range.from;
-      // Si se están viendo más de 45 velas (zoom alejado), activar modo CANAL
-      if (barsCount > 45) {
-        setCurrentZoomLevel('ZOOMED_OUT');
-      } else {
-        setCurrentZoomLevel('ZOOMED_IN');
+      const newZoomLevel = barsCount > 45 ? 'ZOOMED_OUT' : 'ZOOMED_IN';
+
+      // Únicamente emitir estado si cambia el nivel de zoom
+      if (newZoomLevel !== zoomLevelRef.current) {
+        zoomLevelRef.current = newZoomLevel;
+        setTimeout(() => {
+          setCurrentZoomLevel(newZoomLevel);
+        }, 0);
       }
     });
 
