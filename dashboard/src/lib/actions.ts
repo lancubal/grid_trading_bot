@@ -35,6 +35,36 @@ export interface SystemAgeInfo {
   };
 }
 
+export interface ProfitPerformancePoint {
+  timestamp: number;
+  dateLabel: string;
+  btcPrice: number;
+  botEquity: number;
+  holdEquity: number;
+  botProfitNet: number;
+  alphaUsd: number;
+  alphaPercent: number;
+  highWaterMark: number;
+  drawdownUsd: number;
+  drawdownPercent: number;
+  isDrawdown: boolean;
+}
+
+export interface ProfitPerformanceSummary {
+  timeframe: '24h' | '7d' | '30d' | '90d' | 'all';
+  initialInvestment: number;
+  currentBtcPrice: number;
+  startBtcPrice: number;
+  latestBotEquity: number;
+  latestHoldEquity: number;
+  latestBotProfitNet: number;
+  latestAlphaUsd: number;
+  latestAlphaPercent: number;
+  maxDrawdownUsd: number;
+  maxDrawdownPercent: number;
+  points: ProfitPerformancePoint[];
+}
+
 /**
  * 1. Obtener KPIs y Balance Total (Módulo A & C)
  */
@@ -385,7 +415,238 @@ export async function generatePerformanceReport(periodKey: '24h' | '7d' | '30d' 
 }
 
 /**
- * 4. Obtener el estado actual de la escalera de precios (Módulo C)
+ * 4. Obtener datos agrupados (Bucketing) para el Gráfico Comparativo Bot vs HODL (Alpha & Drawdown)
+ */
+export async function getProfitPerformanceChartData(
+  timeframe: '24h' | '7d' | '30d' | '90d' | 'all' = '7d'
+): Promise<ProfitPerformanceSummary> {
+  try {
+    const configRecord = await prisma.botConfig.findUnique({
+      where: { key: 'GRID_INVESTMENT' },
+    }).catch(() => null);
+    const initialInvestment = new Decimal(configRecord ? configRecord.value : process.env.GRID_INVESTMENT || '2000.00');
+
+    const filledOrders = await prisma.order.findMany({
+      where: { status: 'FILLED' },
+      orderBy: { updatedAt: 'asc' },
+      select: { side: true, price: true, amount: true, fee: true, gridLevelId: true, updatedAt: true },
+    }).catch(() => []);
+
+    if (filledOrders.length === 0) {
+      const nowMs = Date.now();
+      const defaultPrice = 63600;
+      const initialVal = initialInvestment.toNumber();
+      return {
+        timeframe,
+        initialInvestment: initialVal,
+        currentBtcPrice: defaultPrice,
+        startBtcPrice: defaultPrice,
+        latestBotEquity: initialVal,
+        latestHoldEquity: initialVal,
+        latestBotProfitNet: 0,
+        latestAlphaUsd: 0,
+        latestAlphaPercent: 0,
+        maxDrawdownUsd: 0,
+        maxDrawdownPercent: 0,
+        points: [
+          {
+            timestamp: nowMs - 3600000,
+            dateLabel: new Date(nowMs - 3600000).toISOString().slice(5, 16).replace('T', ' '),
+            btcPrice: defaultPrice,
+            botEquity: initialVal,
+            holdEquity: initialVal,
+            botProfitNet: 0,
+            alphaUsd: 0,
+            alphaPercent: 0,
+            highWaterMark: initialVal,
+            drawdownUsd: 0,
+            drawdownPercent: 0,
+            isDrawdown: false,
+          },
+          {
+            timestamp: nowMs,
+            dateLabel: new Date(nowMs).toISOString().slice(5, 16).replace('T', ' '),
+            btcPrice: defaultPrice,
+            botEquity: initialVal,
+            holdEquity: initialVal,
+            botProfitNet: 0,
+            alphaUsd: 0,
+            alphaPercent: 0,
+            highWaterMark: initialVal,
+            drawdownUsd: 0,
+            drawdownPercent: 0,
+            isDrawdown: false,
+          },
+        ],
+      };
+    }
+
+    const startPrice = new Decimal(filledOrders[0].price.toString());
+    const firstOrderTime = filledOrders[0].updatedAt.getTime();
+    const now = Date.now();
+
+    let periodStart = firstOrderTime;
+    let bucketSizeMs = 2 * 3600 * 1000; // Default 2 horas
+
+    if (timeframe === '24h') {
+      periodStart = Math.max(firstOrderTime, now - 24 * 3600 * 1000);
+      bucketSizeMs = 30 * 60 * 1000; // 30 minutos
+    } else if (timeframe === '7d') {
+      periodStart = Math.max(firstOrderTime, now - 7 * 24 * 3600 * 1000);
+      bucketSizeMs = 2 * 3600 * 1000; // 2 horas
+    } else if (timeframe === '30d') {
+      periodStart = Math.max(firstOrderTime, now - 30 * 24 * 3600 * 1000);
+      bucketSizeMs = 8 * 3600 * 1000; // 8 horas
+    } else if (timeframe === '90d') {
+      periodStart = Math.max(firstOrderTime, now - 90 * 24 * 3600 * 1000);
+      bucketSizeMs = 24 * 3600 * 1000; // 24 horas
+    } else {
+      // 'all'
+      const totalSpanMs = Math.max(bucketSizeMs, now - firstOrderTime);
+      bucketSizeMs = Math.max(30 * 60 * 1000, Math.floor(totalSpanMs / 80));
+      periodStart = firstOrderTime;
+    }
+
+    const points: ProfitPerformancePoint[] = [];
+    let highWaterMark = initialInvestment;
+    let maxDrawdownUsd = new Decimal(0);
+    let maxDrawdownPercent = 0;
+
+    const initialUsdt = initialInvestment.dividedBy(2);
+    const initialBtc = initialInvestment.dividedBy(2).dividedBy(startPrice);
+
+    for (let t = periodStart; t <= now + bucketSizeMs / 2; t += bucketSizeMs) {
+      const targetTime = Math.min(t, now);
+      const ordersUpToT = filledOrders.filter((o) => o.updatedAt.getTime() <= targetTime);
+
+      let usdtCash = initialUsdt;
+      let heldBtc = initialBtc;
+      let botProfitNet = new Decimal(0);
+
+      const buyOrders = ordersUpToT.filter((o) => o.side === 'BUY');
+      const sellOrders = ordersUpToT.filter((o) => o.side === 'SELL');
+
+      for (const ord of ordersUpToT) {
+        const price = new Decimal(ord.price.toString());
+        const amount = new Decimal(ord.amount.toString());
+        const fee = ord.fee ? new Decimal(ord.fee.toString()) : price.times(amount).times(0.0005);
+
+        if (ord.side === 'BUY') {
+          usdtCash = usdtCash.minus(price.times(amount)).minus(fee);
+          heldBtc = heldBtc.plus(amount);
+        } else {
+          usdtCash = usdtCash.plus(price.times(amount)).minus(fee);
+          heldBtc = heldBtc.minus(amount);
+        }
+      }
+
+      for (const sell of sellOrders) {
+        const sellPrice = new Decimal(sell.price.toString());
+        const amount = new Decimal(sell.amount.toString());
+
+        const matchingBuy = buyOrders.find(
+          (b) => (b.gridLevelId === sell.gridLevelId - 1 || b.gridLevelId === sell.gridLevelId) && b.updatedAt.getTime() <= sell.updatedAt.getTime()
+        );
+
+        const buyPrice = matchingBuy ? new Decimal(matchingBuy.price.toString()) : sellPrice.dividedBy(1.0033);
+        const grossSpread = sellPrice.minus(buyPrice).times(amount);
+        const buyFee = buyPrice.times(amount).times(0.0005);
+        const sellFee = sellPrice.times(amount).times(0.0005);
+
+        const cycleNet = grossSpread.minus(buyFee).minus(sellFee);
+        if (cycleNet.greaterThan(0)) {
+          botProfitNet = botProfitNet.plus(cycleNet);
+        }
+      }
+
+      const lastOrderAtT = ordersUpToT[ordersUpToT.length - 1];
+      const btcPrice = lastOrderAtT ? new Decimal(lastOrderAtT.price.toString()) : startPrice;
+
+      const botEquity = usdtCash.plus(heldBtc.times(btcPrice));
+      const holdEquity = initialInvestment.times(btcPrice).dividedBy(startPrice);
+      const alphaUsd = botEquity.minus(holdEquity);
+      const alphaPercent = initialInvestment.isZero() ? 0 : alphaUsd.dividedBy(initialInvestment).times(100).toNumber();
+
+      if (botEquity.greaterThan(highWaterMark)) {
+        highWaterMark = botEquity;
+      }
+
+      const drawdownUsd = Decimal.max(0, highWaterMark.minus(botEquity));
+      const drawdownPercent = highWaterMark.isZero() ? 0 : drawdownUsd.dividedBy(highWaterMark).times(100).toNumber();
+
+      if (drawdownUsd.greaterThan(maxDrawdownUsd)) {
+        maxDrawdownUsd = drawdownUsd;
+      }
+      if (drawdownPercent > maxDrawdownPercent) {
+        maxDrawdownPercent = drawdownPercent;
+      }
+
+      const dateObj = new Date(targetTime);
+      const monthDayStr = `${(dateObj.getMonth() + 1).toString().padStart(2, '0')}-${dateObj.getDate().toString().padStart(2, '0')}`;
+      const timeStr = `${dateObj.getHours().toString().padStart(2, '0')}:${dateObj.getMinutes().toString().padStart(2, '0')}`;
+
+      points.push({
+        timestamp: targetTime,
+        dateLabel: `${monthDayStr} ${timeStr}`,
+        btcPrice: Number(btcPrice.toFixed(2)),
+        botEquity: Number(botEquity.toFixed(2)),
+        holdEquity: Number(holdEquity.toFixed(2)),
+        botProfitNet: Number(botProfitNet.toFixed(2)),
+        alphaUsd: Number(alphaUsd.toFixed(2)),
+        alphaPercent: Number(alphaPercent.toFixed(2)),
+        highWaterMark: Number(highWaterMark.toFixed(2)),
+        drawdownUsd: Number(drawdownUsd.toFixed(2)),
+        drawdownPercent: Number(drawdownPercent.toFixed(2)),
+        isDrawdown: drawdownPercent > 0.05,
+      });
+
+      if (targetTime >= now) break;
+    }
+
+    const lastPoint = points[points.length - 1] ?? {
+      btcPrice: startPrice.toNumber(),
+      botEquity: initialInvestment.toNumber(),
+      holdEquity: initialInvestment.toNumber(),
+      botProfitNet: 0,
+      alphaUsd: 0,
+      alphaPercent: 0,
+    };
+
+    return {
+      timeframe,
+      initialInvestment: initialInvestment.toNumber(),
+      currentBtcPrice: lastPoint.btcPrice,
+      startBtcPrice: startPrice.toNumber(),
+      latestBotEquity: lastPoint.botEquity,
+      latestHoldEquity: lastPoint.holdEquity,
+      latestBotProfitNet: lastPoint.botProfitNet,
+      latestAlphaUsd: lastPoint.alphaUsd,
+      latestAlphaPercent: lastPoint.alphaPercent,
+      maxDrawdownUsd: Number(maxDrawdownUsd.toFixed(2)),
+      maxDrawdownPercent: Number(maxDrawdownPercent.toFixed(2)),
+      points,
+    };
+  } catch (err) {
+    console.error('Error calculating profit performance chart data:', err);
+    return {
+      timeframe,
+      initialInvestment: 2000,
+      currentBtcPrice: 63600,
+      startBtcPrice: 63600,
+      latestBotEquity: 2000,
+      latestHoldEquity: 2000,
+      latestBotProfitNet: 0,
+      latestAlphaUsd: 0,
+      latestAlphaPercent: 0,
+      maxDrawdownUsd: 0,
+      maxDrawdownPercent: 0,
+      points: [],
+    };
+  }
+}
+
+/**
+ * 5. Obtener el estado actual de la escalera de precios (Módulo C)
  */
 export async function getGridLadder() {
   try {
@@ -425,7 +686,7 @@ export async function getGridLadder() {
 }
 
 /**
- * 5. Obtener los últimos Flips completados (Módulo D)
+ * 6. Obtener los últimos Flips completados (Módulo D)
  */
 export async function getRecentFlips(limit: number = 20) {
   try {

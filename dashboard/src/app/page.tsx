@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { HeaderKPI } from '@/components/HeaderKPI';
 import { TradingViewChart } from '@/components/TradingViewChart';
 import { GridLadder } from '@/components/GridLadder';
+import { ProfitPerformanceChart } from '@/components/ProfitPerformanceChart';
 import { FlipsHistoryTable } from '@/components/FlipsHistoryTable';
 import { ConsoleLogs } from '@/components/ConsoleLogs';
 import { ReportGenerator } from '@/components/ReportGenerator';
@@ -84,7 +85,7 @@ export default function DashboardPage() {
         isRefreshing={isRefreshing}
       />
 
-      {/* MÓDULO B & MÓDULO C (Gráfico + Matriz Escalones) */}
+      {/* MÓDULO B & MÓDULO C: GRÁFICO PRINCIPAL DE GRILLA & MATRIZ ESCALONES (PRIORIDAD ALTA ARRIBA) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2">
           <TradingViewChart
@@ -102,6 +103,9 @@ export default function DashboardPage() {
           />
         </div>
       </div>
+
+      {/* MÓDULO PROFIT & ALPHA COMPARATIVO (UBICADO ABAJO DEL GRÁFICO ORIGINAL CON SELECTOR DE MODO) */}
+      <ProfitPerformanceChart />
 
       {/* MÓDULO D: Historial de Flips */}
       <FlipsHistoryTable flips={flips} />
