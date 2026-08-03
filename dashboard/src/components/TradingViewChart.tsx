@@ -78,7 +78,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
             lineWidth: 2 as LineWidth,
             lineStyle: LineStyle.Solid,
             axisLabelVisible: true,
-            title: `TECHO GRILLA ($${maxPrice.toFixed(0)})`,
+            title: `TECHO ($${maxPrice.toFixed(0)})`,
           });
           priceLinesRef.current.push(topBoundary);
 
@@ -88,7 +88,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
             lineWidth: 2 as LineWidth,
             lineStyle: LineStyle.Solid,
             axisLabelVisible: true,
-            title: `PISO GRILLA ($${minPrice.toFixed(0)})`,
+            title: `PISO ($${minPrice.toFixed(0)})`,
           });
           priceLinesRef.current.push(bottomBoundary);
 
@@ -100,7 +100,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
               lineWidth: 1 as LineWidth,
               lineStyle: LineStyle.Dashed,
               axisLabelVisible: true,
-              title: `ZONA DE VENTA (${sellLevels.length} Órdenes)`,
+              title: `VENTA (${sellLevels.length})`,
             });
             priceLinesRef.current.push(sellZoneLine);
           }
@@ -113,12 +113,12 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
               lineWidth: 1 as LineWidth,
               lineStyle: LineStyle.Dashed,
               axisLabelVisible: true,
-              title: `ZONA DE COMPRA (${buyLevels.length} Órdenes)`,
+              title: `COMPRA (${buyLevels.length})`,
             });
             priceLinesRef.current.push(buyZoneLine);
           }
         } else {
-          // --- MODO DETALLADO (Zoom Cercano: Jerarquía de opacidad individual) ---
+          // --- MODO DETALLADO (Sin texto sobre las velas para liberar el extremo derecho) ---
           gridLevels.forEach((level) => {
             const isActiveOrder = Boolean(level.activeOrder);
             const isHolding = level.isHolding;
@@ -136,22 +136,17 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
               }
               lineWidth = 2 as LineWidth;
               lineStyle = LineStyle.Solid;
-              axisLabelVisible = true;
+              axisLabelVisible = true; // Badge con el precio exacto en la barra de escala a la derecha
             }
 
-            const title = isActiveOrder
-              ? `${level.activeOrder?.side === 'SELL' ? 'VENTA' : 'COMPRA'} #${level.levelIndex}`
-              : isHolding
-              ? `VENTA #${level.levelIndex}`
-              : `#${level.levelIndex}`;
-
+            // Dejamos el title vacío para que NO dibuje cajas de texto sobre las velas más recientes
             const priceLine = series.createPriceLine({
               price: level.price,
               color,
               lineWidth,
               lineStyle,
               axisLabelVisible,
-              title,
+              title: '', // Liberar extremos más importantes a la derecha
             });
 
             if (priceLine) {
