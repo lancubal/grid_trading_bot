@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { createChart, IChartApi, ISeriesApi, LineStyle } from 'lightweight-charts';
-import { Layers, Eye, ZoomIn, ZoomOut } from 'lucide-react';
+import { createChart, IChartApi, ISeriesApi, LineStyle, LineWidth } from 'lightweight-charts';
+import { Eye, ZoomIn, ZoomOut } from 'lucide-react';
 
 interface GridLevelItem {
   id: string;
@@ -62,7 +62,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
       const topBoundary = candlestickSeriesRef.current.createPriceLine({
         price: maxPrice,
         color: '#ef4444',
-        lineWidth: 2,
+        lineWidth: 2 as LineWidth,
         lineStyle: LineStyle.Solid,
         axisLabelVisible: true,
         title: `TECHO GRILLA ($${maxPrice.toFixed(0)})`,
@@ -73,7 +73,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
       const bottomBoundary = candlestickSeriesRef.current.createPriceLine({
         price: minPrice,
         color: '#10b981',
-        lineWidth: 2,
+        lineWidth: 2 as LineWidth,
         lineStyle: LineStyle.Solid,
         axisLabelVisible: true,
         title: `PISO GRILLA ($${minPrice.toFixed(0)})`,
@@ -86,7 +86,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
         const sellZoneLine = candlestickSeriesRef.current.createPriceLine({
           price: avgSell,
           color: 'rgba(239, 68, 68, 0.75)',
-          lineWidth: 1,
+          lineWidth: 1 as LineWidth,
           lineStyle: LineStyle.Dashed,
           axisLabelVisible: true,
           title: `ZONA DE VENTA (${sellLevels.length} Órdenes)`,
@@ -100,7 +100,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
         const buyZoneLine = candlestickSeriesRef.current.createPriceLine({
           price: avgBuy,
           color: 'rgba(16, 185, 129, 0.75)',
-          lineWidth: 1,
+          lineWidth: 1 as LineWidth,
           lineStyle: LineStyle.Dashed,
           axisLabelVisible: true,
           title: `ZONA DE COMPRA (${buyLevels.length} Órdenes)`,
@@ -114,7 +114,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
         const isHolding = level.isHolding;
 
         let color = '#475569'; // Gris fantasma para inactivas/históricas
-        let lineWidth = 1;
+        let lineWidth: LineWidth = 1 as LineWidth;
         let lineStyle = LineStyle.Dotted;
         let axisLabelVisible = false;
 
@@ -125,7 +125,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
           } else {
             color = '#10b981'; // Verde brillante Compra
           }
-          lineWidth = 2;
+          lineWidth = 2 as LineWidth;
           lineStyle = LineStyle.Solid;
           axisLabelVisible = true;
         }
