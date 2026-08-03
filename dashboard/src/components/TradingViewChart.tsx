@@ -29,6 +29,12 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
   const candlestickSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const priceLinesRef = useRef<any[]>([]);
 
+  // Ref estable para evitar re-inicializaciones del gráfico en re-renders del padre
+  const onPriceUpdateRef = useRef(onPriceUpdate);
+  useEffect(() => {
+    onPriceUpdateRef.current = onPriceUpdate;
+  });
+
   const [lodMode, setLodMode] = useState<LodMode>('AUTO');
   const [currentZoomLevel, setCurrentZoomLevel] = useState<'ZOOMED_IN' | 'ZOOMED_OUT'>('ZOOMED_OUT');
   const zoomLevelRef = useRef<'ZOOMED_IN' | 'ZOOMED_OUT'>('ZOOMED_OUT');
@@ -37,19 +43,18 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
   // Re-dibujar líneas de grilla según el Nivel de Detalle (LOD) de manera asíncrona segura
   const renderGridLines = useCallback(() => {
     requestAnimationFrame(() => {
-      if (!candlestickSeriesRef.current || gridLevels.length === 0) return;
+      const series = candlestickSeriesRef.current;
+      if (!series || gridLevels.length === 0) return;
 
-      // 1. Limpiar líneas anteriores con verificación de seguridad
-      priceLinesRef.current.forEach((line) => {
-        try {
-          if (candlestickSeriesRef.current) {
-            candlestickSeriesRef.current.removePriceLine(line);
-          }
-        } catch (e) {
-          // Captura silenciosa si el objeto ya fue desechado por la canvas
-        }
-      });
-      priceLinesRef.current = [];
+      // 1. Limpiar líneas anteriores con verificación estricta de seguridad
+      if (priceLinesRef.current.length > 0) {
+        priceLinesRef.current.forEach((line) => {
+          try {
+            series.removePriceLine(line);
+          } catch (e) {}
+        });
+        priceLinesRef.current = [];
+      }
 
       // Calcular min/max y promedios para Zonas
       const sortedLevels = [...gridLevels].sort((a, b) => a.price - b.price);
@@ -65,7 +70,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
       try {
         if (shouldShowChannelOnly) {
           // --- MODO CANAL RESUMIDO (Zoom Alejado: evita efecto código de barras) ---
-          const topBoundary = candlestickSeriesRef.current.createPriceLine({
+          const topBoundary = series.createPriceLine({
             price: maxPrice,
             color: '#ef4444',
             lineWidth: 2 as LineWidth,
@@ -75,7 +80,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
           });
           priceLinesRef.current.push(topBoundary);
 
-          const bottomBoundary = candlestickSeriesRef.current.createPriceLine({
+          const bottomBoundary = series.createPriceLine({
             price: minPrice,
             color: '#10b981',
             lineWidth: 2 as LineWidth,
@@ -87,7 +92,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
 
           if (sellLevels.length > 0) {
             const avgSell = sellLevels.reduce((acc, l) => acc + l.price, 0) / sellLevels.length;
-            const sellZoneLine = candlestickSeriesRef.current.createPriceLine({
+            const sellZoneLine = series.createPriceLine({
               price: avgSell,
               color: 'rgba(239, 68, 68, 0.75)',
               lineWidth: 1 as LineWidth,
@@ -100,7 +105,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
 
           if (buyLevels.length > 0) {
             const avgBuy = buyLevels.reduce((acc, l) => acc + l.price, 0) / buyLevels.length;
-            const buyZoneLine = candlestickSeriesRef.current.createPriceLine({
+            const buyZoneLine = series.createPriceLine({
               price: avgBuy,
               color: 'rgba(16, 185, 129, 0.75)',
               lineWidth: 1 as LineWidth,
@@ -138,7 +143,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
               ? `VENTA #${level.levelIndex}`
               : `#${level.levelIndex}`;
 
-            const priceLine = candlestickSeriesRef.current?.createPriceLine({
+            const priceLine = series.createPriceLine({
               price: level.price,
               color,
               lineWidth,
@@ -153,15 +158,15 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
           });
         }
       } catch (err) {
-        console.warn('Error seguro actualizando líneas de precio:', err);
+        console.warn('Advertencia actualizando líneas:', err);
       }
     });
   }, [gridLevels, lodMode, currentZoomLevel]);
 
+  // Inicializar Gráfico TradingView UNA SOLA VEZ al montar el componente (sin recreaciones por re-renders)
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
-    // 1. Inicializar Gráfico TradingView Lightweight Charts
     const chart = createChart(chartContainerRef.current, {
       width: chartContainerRef.current.clientWidth,
       height: 480,
@@ -197,13 +202,12 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
     chartRef.current = chart;
     candlestickSeriesRef.current = candlestickSeries;
 
-    // Detectar Zoom SIN bucles de re-renderizado ni colisiones de RAF
+    // Detectar Zoom sin bucles
     chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (!range) return;
       const barsCount = range.to - range.from;
       const newZoomLevel = barsCount > 45 ? 'ZOOMED_OUT' : 'ZOOMED_IN';
 
-      // Únicamente emitir estado si cambia el nivel de zoom
       if (newZoomLevel !== zoomLevelRef.current) {
         zoomLevelRef.current = newZoomLevel;
         setTimeout(() => {
@@ -226,7 +230,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
           }));
           candlestickSeries.setData(formatted);
           if (formatted.length > 0) {
-            onPriceUpdate(formatted[formatted.length - 1].close);
+            onPriceUpdateRef.current(formatted[formatted.length - 1].close);
           }
         }
       })
@@ -248,7 +252,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
             close: parseFloat(k.c),
           };
           candlestickSeries.update(candle);
-          onPriceUpdate(candle.close);
+          onPriceUpdateRef.current(candle.close);
         }
       } catch (err) {
         console.error('WS parsing error:', err);
@@ -270,7 +274,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
       ws.close();
       chart.remove();
     };
-  }, [onPriceUpdate]);
+  }, []); // Array de dependencias vacío: se instancia 1 sola vez en la vida del componente
 
   // Actualizar líneas cuando cambie la grilla o la configuración LOD
   useEffect(() => {
