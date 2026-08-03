@@ -178,20 +178,18 @@ export function HeaderKPI({ stats, currentPrice, onRefresh, isRefreshing }: Head
               +{stats.roiPercent}% ROI
             </span>
           </div>
-          <p className="text-[10px] text-slate-400 mt-1">Deducidas comisiones Maker (0.05%)</p>
         </div>
 
         {/* Card 2: Flips Completados */}
         <div className="glass-card p-4 rounded-xl border border-slate-800 hover:border-cyan-500/40 transition-all">
           <div className="flex items-center justify-between text-slate-400 text-xs font-medium mb-1">
-            <span>Flips Completados (Ciclos)</span>
+            <span>Flips Completados</span>
             <Repeat className="w-4 h-4 text-cyan-400" />
           </div>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-black text-white tracking-tight">
               {stats.totalFlips.toLocaleString()}
             </span>
-            <span className="text-xs text-slate-400">ciclos</span>
           </div>
           <p className="text-[10px] text-slate-400 mt-1">Volumen: ${stats.totalVolumeUsd.toLocaleString()} USD</p>
         </div>
@@ -219,7 +217,6 @@ export function HeaderKPI({ stats, currentPrice, onRefresh, isRefreshing }: Head
           <div className="text-2xl font-black text-white tracking-tight">
             ${currentPrice > 0 ? currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'Cargando...'}
           </div>
-          <p className="text-[10px] text-slate-400 mt-1">Actualizado a 60 FPS directo desde Binance</p>
         </div>
       </div>
     </header>

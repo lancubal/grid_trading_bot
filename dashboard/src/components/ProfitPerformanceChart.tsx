@@ -157,6 +157,10 @@ export function ProfitPerformanceChart() {
       })
     : [];
 
+  const initialCapitalStr = data?.initialInvestment
+    ? `$${Math.round(data.initialInvestment).toLocaleString()}`
+    : '$1,000';
+
   return (
     <div className="glass-panel p-5 rounded-xl space-y-4 border border-slate-800 bg-slate-900/60 shadow-xl">
       {/* 1. Header con Selectores de Modo y Temporalidad */}
@@ -167,11 +171,8 @@ export function ProfitPerformanceChart() {
           </div>
           <div>
             <h3 className="text-sm font-bold text-white tracking-wide uppercase flex items-center gap-2">
-              Curva de Profit Acumulado & Alpha Comparativo (Zoom Adaptativo)
+              Curva de Profit Acumulado & Alpha Comparativo
             </h3>
-            <p className="text-xs text-slate-400">
-              Eje Y (Valores en $ USD con auto-zoom) y Eje X (Fechas redondas) con Data Bucketing
-            </p>
           </div>
         </div>
 
@@ -241,8 +242,8 @@ export function ProfitPerformanceChart() {
           </div>
           <p className="text-[10px] text-slate-400">
             {viewMode === 'REALIZED_PROFIT'
-              ? 'Efectivo neto acumulado en USDT por flips cerrados (siempre sube)'
-              : `Ganancia extra vs haber dejado los $2,000 en HODL (${data && data.latestAlphaPercent >= 0 ? '+' : ''}${data?.latestAlphaPercent.toFixed(2)}%)`}
+              ? 'Efectivo neto acumulado en USDT por flips cerrados'
+              : `Ganancia extra vs haber dejado los ${initialCapitalStr} en HODL (${data && data.latestAlphaPercent >= 0 ? '+' : ''}${data?.latestAlphaPercent.toFixed(2)}%)`}
           </p>
         </div>
 
@@ -265,7 +266,7 @@ export function ProfitPerformanceChart() {
           <div className="text-lg font-mono font-bold text-purple-300">
             ${data?.latestHoldEquity.toFixed(2) ?? '2000.00'} USD
           </div>
-          <p className="text-[10px] text-slate-400">Valor si los $2,000 estuvieran 100% en BTC</p>
+          <p className="text-[10px] text-slate-400">Valor si los {initialCapitalStr} estuvieran 100% en BTC</p>
         </div>
 
         <div className="bg-slate-950/70 p-3 rounded-lg border border-slate-800/80 space-y-1">
@@ -331,7 +332,7 @@ export function ProfitPerformanceChart() {
           <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 z-20">
             <div className="flex items-center gap-2 text-cyan-400 text-xs font-mono">
               <Activity className="w-4 h-4 animate-spin" />
-              Calculando Ejes y Data Bucketing en Backend...
+              Calculando Ejes en Backend...
             </div>
           </div>
         ) : points.length === 0 ? (

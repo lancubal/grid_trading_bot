@@ -36,7 +36,7 @@ export function ConsoleLogs() {
         <div className="flex items-center gap-2">
           <Terminal className="w-4 h-4 text-purple-400" />
           <h3 className="text-sm font-bold tracking-wide text-white uppercase">
-            Logs del Motor & Volatilidad ATR (Terminal Consola)
+            Logs del Motor
           </h3>
         </div>
 

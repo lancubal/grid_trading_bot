@@ -40,7 +40,7 @@ export function FlipsHistoryTable({ flips }: FlipsHistoryTableProps) {
         <div className="flex items-center gap-2">
           <History className="w-4 h-4 text-emerald-400" />
           <h3 className="text-sm font-bold tracking-wide text-white uppercase">
-            Historial de Flips Completados (Ejecuciones)
+            Historial de Flips Completados
           </h3>
         </div>
 

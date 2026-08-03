@@ -3,7 +3,6 @@
 import React, { useState } from 'react';
 import {
   FileText,
-  Download,
   Copy,
   Check,
   AlertCircle,
@@ -20,7 +19,6 @@ import {
   generatePerformanceReport,
   exportFlipsCsv,
   TearSheetReportData,
-  DailyHeatmapDay,
 } from '@/lib/actions';
 
 type PeriodKey = '24h' | '7d' | '30d' | '90d';
@@ -108,11 +106,8 @@ export function ReportGenerator() {
           </div>
           <div>
             <h3 className="text-sm font-bold text-white uppercase tracking-wide">
-              Generador de Reporte Institucional (Tear Sheet)
+              Generador de Reporte
             </h3>
-            <p className="text-xs text-slate-400">
-              Métricas de salud del grid, mapa de calor de actividad diaria y exportación limpia a PDF/CSV
-            </p>
           </div>
         </div>
 
@@ -144,7 +139,7 @@ export function ReportGenerator() {
             ) : (
               <Zap className="w-4 h-4" />
             )}
-            Generar Tear Sheet
+            Generar Reporte
           </button>
         </div>
       </div>
@@ -157,14 +152,14 @@ export function ReportGenerator() {
         </div>
       )}
 
-      {/* Vista previa del Tear Sheet Generado */}
+      {/* Vista previa del Reporte Generado */}
       {reportData ? (
         <div className="space-y-5 animate-fadeIn">
           {/* 1. Bar de Acciones de Exportación Limpia */}
           <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-950/80 p-3 rounded-lg border border-slate-800/80 print:hidden">
             <div className="flex items-center gap-2 text-xs text-slate-300">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Tear Sheet Listo (`{reportData.periodKey.toUpperCase()}`) — Generado a las {reportData.generatedAt} UTC</span>
+              <span>Reporte Listo (`{reportData.periodKey.toUpperCase()}`) — Generado a las {reportData.generatedAt} UTC</span>
             </div>
 
             <div className="flex items-center gap-2">
@@ -198,7 +193,7 @@ export function ReportGenerator() {
             </div>
           </div>
 
-          {/* 2. Métricas de Salud del Grid (Grid Health Cards) */}
+          {/* 2. Métricas de Salud del Grid */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {/* Card A: Tiempo de Vida del Flip */}
             <div className="bg-slate-950/70 p-3.5 rounded-lg border border-slate-800 space-y-1">
@@ -243,13 +238,13 @@ export function ReportGenerator() {
             </div>
           </div>
 
-          {/* 3. Mapa de Calor de Actividad Diaria (Estilo GitHub Heatmap) */}
+          {/* 3. Mapa de Calor de Actividad Diaria */}
           <div className="bg-slate-950/70 p-4 rounded-lg border border-slate-800 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Calendar className="w-4 h-4 text-emerald-400" />
                 <h4 className="text-xs font-bold text-white uppercase tracking-wider">
-                  Mapa de Calor de Actividad Diaria (Volatilidad & Flips)
+                  Mapa de Calor de Actividad Diaria
                 </h4>
               </div>
               <div className="flex items-center gap-2 text-[10px] text-slate-400">
@@ -290,7 +285,7 @@ export function ReportGenerator() {
         <div className="p-8 text-center bg-slate-950/40 rounded-lg border border-dashed border-slate-800 space-y-3 print:hidden">
           <Grid className="w-8 h-8 text-slate-600 mx-auto" />
           <div className="text-xs text-slate-400">
-            Seleccioná una temporalidad y hacé clic en <strong className="text-cyan-300 font-semibold">Generar Tear Sheet</strong> para construir el reporte cuantitativo.
+            Seleccioná una temporalidad y hacé clic en <strong className="text-cyan-300 font-semibold">Generar Reporte</strong> para construir el reporte.
           </div>
         </div>
       )}
