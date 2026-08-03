@@ -147,25 +147,25 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
             priceLinesRef.current.push(buyZoneLine);
           }
         } else {
-          // --- MODO DETALLADO (Sin texto sobre las velas para liberar el extremo derecho) ---
+          // --- MODO DETALLADO (Diferencia Órdenes Vivas vs Líneas Fantasma) ---
           gridLevels.forEach((level) => {
             const isActiveOrder = Boolean(level.activeOrder);
-            const isHolding = level.isHolding;
 
-            let color = '#475569';
+            let color = '#475569'; // Gris opaco para líneas fantasma históricas/inactivas
             let lineWidth: LineWidth = 1 as LineWidth;
             let lineStyle = LineStyle.Dotted;
             let axisLabelVisible = false;
 
-            if (isActiveOrder || isHolding) {
-              if (isHolding || level.activeOrder?.side === 'SELL') {
-                color = '#ef4444';
+            // Únicamente si la orden está VIVA en Binance se destaca en verde/rojo sólido
+            if (isActiveOrder) {
+              if (level.activeOrder?.side === 'SELL' || level.isHolding) {
+                color = '#ef4444'; // Rojo vivo
               } else {
-                color = '#10b981';
+                color = '#10b981'; // Verde vivo
               }
               lineWidth = 2 as LineWidth;
               lineStyle = LineStyle.Solid;
-              axisLabelVisible = true; // Badge con el precio exacto en la barra de escala a la derecha
+              axisLabelVisible = true; // Badge con el precio exacto a la derecha
             }
 
             const priceLine = series.createPriceLine({
@@ -174,7 +174,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
               lineWidth,
               lineStyle,
               axisLabelVisible,
-              title: '', // Liberar extremos más importantes a la derecha
+              title: '', // Sin texto sobre las velas para liberar la vista
             });
 
             if (priceLine) {
@@ -326,8 +326,9 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
   useEffect(() => {
     renderGridLines();
 
-    const activeCount = gridLevels.filter((g) => g.activeOrder || g.isHolding).length;
-    setActiveOrdersCount(activeCount);
+    // Vivas: solo órdenes límites abiertas vivas en Binance (activeOrder !== null)
+    const liveCount = gridLevels.filter((g) => Boolean(g.activeOrder)).length;
+    setActiveOrdersCount(liveCount);
   }, [gridLevels, renderGridLines]);
 
   return (
