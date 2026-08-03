@@ -37,8 +37,9 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
     onPriceUpdateRef.current = onPriceUpdate;
   });
 
-  const [lodMode, setLodMode] = useState<LodMode>('AUTO');
-  const [candleInterval, setCandleInterval] = useState<CandleInterval>('1m');
+  // Estado por Defecto: Muestra Escalones y 24+ horas de información (velas de 15m)
+  const [lodMode, setLodMode] = useState<LodMode>('DETAILED');
+  const [candleInterval, setCandleInterval] = useState<CandleInterval>('15m');
   const [currentZoomLevel, setCurrentZoomLevel] = useState<'ZOOMED_IN' | 'ZOOMED_OUT'>('ZOOMED_OUT');
   const zoomLevelRef = useRef<'ZOOMED_IN' | 'ZOOMED_OUT'>('ZOOMED_OUT');
   const [activeOrdersCount, setActiveOrdersCount] = useState<number>(0);
@@ -271,8 +272,8 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
       }
     });
 
-    // Cargar 1,000 velas iniciales
-    fetchKlinesData('1m');
+    // Cargar por defecto 24h+ de velas de 15m (hasta 1,000 velas = 10.4 días)
+    fetchKlinesData('15m');
 
     // Conectar a Binance WebSocket dinámico
     const ws = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@kline_1m');
@@ -336,7 +337,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
         <div className="flex items-center gap-2">
           <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
           <h3 className="text-sm font-bold tracking-wide text-white uppercase flex items-center gap-2">
-            Gráfico en Vivo BTC/USDT (Hasta 1,000 Velas)
+            Gráfico en Vivo BTC/USDT (24h+ Velas & Escalones)
           </h3>
         </div>
 
