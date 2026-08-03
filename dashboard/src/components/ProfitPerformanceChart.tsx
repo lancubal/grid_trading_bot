@@ -57,7 +57,7 @@ export function ProfitPerformanceChart() {
     return seriesType === 'bot' ? p.botEquity : p.holdEquity;
   };
 
-  // Min / Max Y para escalar el SVG dinámicamente con margen cómodo
+  // Min / Max Y para escalar el SVG dinámicamente con zoom adaptativo
   const allValues: number[] = [];
   points.forEach((p) => {
     if (viewMode === 'REALIZED_PROFIT') {
@@ -68,8 +68,18 @@ export function ProfitPerformanceChart() {
     }
   });
 
-  const minY = allValues.length > 0 ? Math.min(0, Math.min(...allValues)) : 0;
-  const maxY = allValues.length > 0 ? Math.max(10, Math.max(...allValues) * 1.02) : 100;
+  const rawMin = allValues.length > 0 ? Math.min(...allValues) : 0;
+  const rawMax = allValues.length > 0 ? Math.max(...allValues) : 100;
+
+  // En modo PORTFOLIO_EQUITY no forzamos 0 en el piso para que la curva tenga zoom completo
+  const minY = viewMode === 'REALIZED_PROFIT'
+    ? Math.min(0, Math.floor(rawMin))
+    : Math.floor(rawMin - Math.max(5, (rawMax - rawMin) * 0.05));
+
+  const maxY = viewMode === 'REALIZED_PROFIT'
+    ? Math.max(10, Math.ceil(rawMax * 1.05))
+    : Math.ceil(rawMax + Math.max(5, (rawMax - rawMin) * 0.05));
+
   const rangeY = maxY - minY || 1;
 
   // Dimensiones del Chart Vectorial
@@ -117,7 +127,24 @@ export function ProfitPerformanceChart() {
     };
   });
 
-  // Generar 5 Marcas de Referencia para el Eje X (Fechas/Horas)
+  // Helper para redondear etiquetas del Eje X a números redondos (ej. 16:00 o 07-28)
+  const formatCleanDateLabel = (rawLabel: string, tf: TimeframeKey) => {
+    const parts = rawLabel.split(' ');
+    if (parts.length < 2) return rawLabel;
+    const datePart = parts[0]; // "07-28"
+    const timePart = parts[1]; // "16:44"
+    const hourClean = `${timePart.split(':')[0]}:00`; // "16:00"
+
+    if (tf === '24h') {
+      return hourClean;
+    }
+    if (tf === '7d' || tf === '30d') {
+      return datePart;
+    }
+    return `${datePart}`;
+  };
+
+  // Generar 5-6 Marcas de Referencia Limpias para el Eje X
   const xTicksCount = Math.min(6, points.length);
   const xTicks = points.length > 0
     ? Array.from({ length: xTicksCount }).map((_, i) => {
@@ -125,7 +152,7 @@ export function ProfitPerformanceChart() {
         const pt = points[index];
         return {
           x: getX(index),
-          label: pt.dateLabel,
+          label: formatCleanDateLabel(pt.dateLabel, timeframe),
         };
       })
     : [];
@@ -140,10 +167,10 @@ export function ProfitPerformanceChart() {
           </div>
           <div>
             <h3 className="text-sm font-bold text-white tracking-wide uppercase flex items-center gap-2">
-              Curva de Profit Acumulado & Alpha Comparativo (Ejes & Escala Real)
+              Curva de Profit Acumulado & Alpha Comparativo (Zoom Adaptativo)
             </h3>
             <p className="text-xs text-slate-400">
-              Eje Y (Valores en $ USD) y Eje X (Fechas/Horas) con Data Bucketing en backend
+              Eje Y (Valores en $ USD con auto-zoom) y Eje X (Fechas redondas) con Data Bucketing
             </p>
           </div>
         </div>
@@ -357,7 +384,7 @@ export function ProfitPerformanceChart() {
               </g>
             ))}
 
-            {/* --- EJE X: Guías Verticales y Textos de Fecha/Hora --- */}
+            {/* --- EJE X: Guías Verticales y Textos de Fecha/Hora Redondos --- */}
             {xTicks.map((tick, idx) => (
               <g key={`x-grid-${idx}`}>
                 <line
