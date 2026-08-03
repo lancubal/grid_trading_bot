@@ -32,7 +32,7 @@ export function GridLadder({ levels, currentPrice, btcBalance, usdtBalance }: Gr
           <div className="flex items-center gap-2">
             <Layers className="w-4 h-4 text-cyan-400" />
             <h3 className="text-sm font-bold tracking-wide text-white uppercase">
-              Matriz de Escalones (Ladder)
+              Matriz de Escalones
             </h3>
           </div>
           <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">

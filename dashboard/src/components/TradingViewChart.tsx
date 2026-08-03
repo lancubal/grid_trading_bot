@@ -337,7 +337,7 @@ export function TradingViewChart({ gridLevels, onPriceUpdate }: TradingViewChart
         <div className="flex items-center gap-2">
           <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
           <h3 className="text-sm font-bold tracking-wide text-white uppercase flex items-center gap-2">
-            Gráfico en Vivo BTC/USDT (24h+ Velas & Escalones)
+            Gráfico en Vivo BTC/USDT
           </h3>
         </div>
 
