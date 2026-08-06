@@ -1,4 +1,4 @@
-# 🤖 Bot de Grid Trading para BTC (Bitcoin)
+#🤖 Bot de Grid Trading para BTC (Bitcoin) - Rango Adaptativo ATR 2026
 
 Bot de trading algorítmico autónomo desarrollado en Node.js y TypeScript, especializado en el mercado de Bitcoin (BTC). Diseñado para operar en entornos de alta disponibilidad y aprovechar la volatilidad intradiaria mediante rangos adaptativos por **ATR (Average True Range)**.
 
