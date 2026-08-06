@@ -13,7 +13,7 @@ export interface IExchangeStreams extends EventEmitter {
 
 /**
  * Adaptador de Streams WebSockets basado en CCXT / WS nativo para capturar ejecuciones en tiempo real.
- * Soporta Binance Testnet (¡100% GRATIS!) y otros exchanges mediante la API unificada.
+ * Soporta Binance Testnet y otros exchanges mediante la API unificada.
  */
 export class CcxtExchangeStreams extends EventEmitter implements IExchangeStreams {
   private exchange!: Exchange;
@@ -42,33 +42,39 @@ export class CcxtExchangeStreams extends EventEmitter implements IExchangeStream
     });
 
     if (this.config.isTestnet) {
-      this.exchange.setSandboxMode(true);
+      try {
+        this.exchange.setSandboxMode(true);
+      } catch (err) {
+        // Ignorar si no soporta sandbox mode
+      }
     }
   }
 
   public async subscribeOrders(symbol: string): Promise<void> {
-    console.log(`[ExchangeStreams] 📡 Conectando WebSocket de órdenes para ${symbol} (${this.config.exchangeId.toUpperCase()})...`);
+    console.log(`[ExchangeStreams] 📡 Conectando servicio de monitoreo de órdenes para ${symbol} (${this.config.exchangeId.toUpperCase()})...`);
     this.isListening = true;
     this.listenOrderLoop(symbol);
   }
 
   public async subscribeTicker(symbol: string): Promise<void> {
-    console.log(`[ExchangeStreams] 📡 Conectando WebSocket de ticker para ${symbol}...`);
+    console.log(`[ExchangeStreams] 📡 Conectando servicio de ticker para ${symbol}...`);
     this.listenTickerLoop(symbol);
   }
 
   public async close(): Promise<void> {
     this.isListening = false;
-    console.log('[ExchangeStreams] 🔌 Conexión WebSocket cerrada.');
+    console.log('[ExchangeStreams] 🔌 Conexión de monitoreo cerrada.');
   }
 
   /**
-   * Bucle asíncrono para escuchar órdenes ejecutadas via WebSocket (CCXT Pro / WS)
+   * Bucle asíncrono para escuchar órdenes ejecutadas via WebSocket o Polling continuo de alta frecuencia
    */
   private async listenOrderLoop(symbol: string): Promise<void> {
+    let wsSupported = true;
+
     while (this.isListening) {
       try {
-        if (typeof (this.exchange as any).watchOrders === 'function') {
+        if (wsSupported && typeof (this.exchange as any).watchOrders === 'function') {
           const rawOrders = await (this.exchange as any).watchOrders(symbol);
           this.reconnectAttempts = 0; // Reset counter on success
 
@@ -76,15 +82,23 @@ export class CcxtExchangeStreams extends EventEmitter implements IExchangeStream
             this.processRawOrder(rawOrder);
           }
         } else {
-          // Fallback a polling optimizado de baja latencia si watchOrders no está disponible
-          await new Promise((resolve) => setTimeout(resolve, 1500));
+          // Fallback a polling optimizado de baja latencia (2s) si watchOrders no está en CCXT estándar
+          await new Promise((resolve) => setTimeout(resolve, 2000));
           if (!this.isListening) break;
-
-          const openOrders = await this.exchange.fetchOpenOrders(symbol);
         }
-      } catch (error) {
+      } catch (error: any) {
         if (!this.isListening) break;
-        console.error('[ExchangeStreams Error] Error en stream de órdenes:', error);
+
+        const errName = String(error.name || error.constructor?.name || '');
+        const errMsg = String(error.message || '');
+
+        if (errName.includes('NotSupported') || errMsg.includes('not supported')) {
+          console.log('[ExchangeStreams] ℹ️ WebSocket watchOrders() no está disponible en CCXT estándar. Activando Polling continuo de órdenes (2s).');
+          wsSupported = false;
+          continue;
+        }
+
+        console.error('[ExchangeStreams Error] Error en stream de órdenes:', error.message || error);
         await this.handleReconnection(symbol);
       }
     }
@@ -184,14 +198,14 @@ export class CcxtExchangeStreams extends EventEmitter implements IExchangeStream
   private async handleReconnection(symbol: string): Promise<void> {
     this.reconnectAttempts++;
     if (this.reconnectAttempts > this.maxReconnectAttempts) {
-      console.error('[ExchangeStreams Fatal] Se alcanzó el número máximo de reintentos de conexión WebSocket.');
-      this.emit('error', new Error('Máximo de reintentos de WebSocket alcanzado'));
+      console.error('[ExchangeStreams Fatal] Se alcanzó el número máximo de reintentos de conexión.');
+      this.emit('error', new Error('Máximo de reintentos alcanzado'));
       this.isListening = false;
       return;
     }
 
     const backoffMs = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-    console.log(`[ExchangeStreams] Reintentando conexión WebSocket (${this.reconnectAttempts}/${this.maxReconnectAttempts}) en ${backoffMs}ms...`);
+    console.log(`[ExchangeStreams] Reintentando conexión (${this.reconnectAttempts}/${this.maxReconnectAttempts}) en ${backoffMs}ms...`);
     await new Promise((resolve) => setTimeout(resolve, backoffMs));
   }
 }
