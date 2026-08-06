@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import { EventEmitter } from 'events';
 import Decimal from 'decimal.js';
 import { OrderSide, OrderStatus } from '@prisma/client';
@@ -68,24 +67,33 @@ async function main() {
   const exchangeAdapter: IExchangeAdapter = new CcxtExchangeAdapter(exchangeConfig);
   await exchangeAdapter.initialize();
 
+  let liveUsdtFree: Decimal | undefined;
+  let liveBtcFree: Decimal | undefined;
+
   // 🔴 VALIDACIÓN DE BALANCE INICIAL (COLD START - PRODUCCIÓN EN VIVO)
   if (!env.DRY_RUN) {
     console.log('[Cold Start] 🔍 Verificando saldo físico real en Binance Spot via CCXT fetchBalance()...');
     try {
       const realBalance = await exchangeAdapter.fetchBalance();
-      const freeUsdt = realBalance.free['USDT'] ? new Decimal(realBalance.free['USDT']) : new Decimal(0);
-      const freeBtc = realBalance.free['BTC'] ? new Decimal(realBalance.free['BTC']) : new Decimal(0);
+      liveUsdtFree = realBalance.free['USDT'] ? new Decimal(realBalance.free['USDT']) : new Decimal(0);
+      liveBtcFree = realBalance.free['BTC'] ? new Decimal(realBalance.free['BTC']) : new Decimal(0);
 
-      console.log(`[Cold Start] 💰 Saldo físico confirmado: $${freeUsdt.toFixed(2)} USDT libre | ${freeBtc.toFixed(6)} BTC libre.`);
+      const symbol = env.GRID_SYMBOL;
+      const initialTicker = await exchangeAdapter.fetchTicker(symbol);
+      const estPrice = initialTicker.last;
+      const totalEquity = liveUsdtFree.plus(liveBtcFree.times(estPrice));
 
-      if (freeUsdt.lessThan(rawGridConfig.investment)) {
+      console.log(
+        `[Cold Start] 💰 Saldo físico verificado: $${liveUsdtFree.toFixed(2)} USDT libre | ${liveBtcFree.toFixed(6)} BTC libre ($${liveBtcFree.times(estPrice).toFixed(2)} USD) = Total Valorizado: $${totalEquity.toFixed(2)} USD.`
+      );
+
+      if (totalEquity.lessThan(rawGridConfig.investment.times(0.85))) {
         console.warn(
-          `[Cold Start Alert] ⚠️ Saldo disponible ($${freeUsdt.toFixed(2)} USDT) es inferior al capital asignado a la grilla ($${rawGridConfig.investment.toFixed(2)} USD).`
+          `[Cold Start Alert] ⚠️ Saldo total valorizado ($${totalEquity.toFixed(2)} USD) es inferior al capital asignado a la grilla ($${rawGridConfig.investment.toFixed(2)} USD).`
         );
 
-        // Intentar autodefensa desde Simple Earn Flexible si faltan USDT para la grilla
         if (exchangeAdapter.redeemSimpleEarnFlexible) {
-          const missingUsdt = rawGridConfig.investment.minus(freeUsdt);
+          const missingUsdt = rawGridConfig.investment.minus(totalEquity);
           console.log(`[Cold Start Auto-Rescate] 💉 Intentando rescatar $${missingUsdt.toFixed(2)} USDT de Binance Simple Earn Flexible para completar capital de siembra...`);
           const rescue = await exchangeAdapter.redeemSimpleEarnFlexible('USDT', missingUsdt);
           if (rescue.success) {
@@ -224,7 +232,7 @@ async function main() {
   // Si DRY_RUN === false (Ejecución real en Binance Spot), conectar WebSocket privado watchOrders()
   let exchangeStreams: IExchangeStreams | null = null;
   if (!env.DRY_RUN && env.EXCHANGE_API_KEY && env.EXCHANGE_API_SECRET) {
-    console.log(`[Live Mode] 🔴 MODO PRODUCCIÓN REAL ACTIVADO: Conectando a WebSocket privado de cuenta Binance (watchOrders)...`);
+    console.log(`[Live Mode] 🔴 MODO PRODUCCIÓN REAL ACTIVADO: Conectando a servicio de monitoreo de cuenta Binance...`);
     const liveStreams = new CcxtExchangeStreams(exchangeConfig);
     await liveStreams.initialize();
     await liveStreams.subscribeOrders(symbol);
@@ -322,8 +330,8 @@ async function main() {
   const openOrdersInDb = await repository.getOpenOrders();
 
   if (openOrdersInDb.length === 0) {
-    console.log('[Seeding] Generando órdenes de siembra iniciales...');
-    const seedPlans = gridManager.generateSeedOrders(currentPrice);
+    console.log('[Seeding] Generando órdenes de siembra iniciales adaptadas al saldo físico disponible...');
+    const seedPlans = gridManager.generateSeedOrders(currentPrice, [], liveUsdtFree, liveBtcFree);
 
     for (const plan of seedPlans) {
       const riskCheck = riskGuard.validateOrder(
@@ -362,17 +370,18 @@ async function main() {
           gridLevelId: plan.levelIndex,
           status: OrderStatus.OPEN,
         });
+
+        console.log(`[Seeding Order] ✅ Orden límite colocada: ${plan.side.toUpperCase()} ${plan.amount} BTC @ $${plan.price.toFixed(2)} USD (Nivel ${plan.levelIndex})`);
       } catch (err: any) {
         if (isInsufficientFundsError(err)) {
-          console.warn(`[Seeding Insufficient Funds Alert] 🚨 Binance rechazó orden de siembra por saldo insuficiente (-2010). Disparando Alerta de Sed e Inyección de Emergencia...`);
-          await checkAndExecuteAutoInjection(true);
+          console.warn(`[Seeding Insufficient Funds Alert] 🚨 Binance rechazó orden de siembra (${plan.side.toUpperCase()} Nivel ${plan.levelIndex}) por saldo insuficiente (-2010).`);
         } else {
           console.error(`[Seeding Order Error] Error al crear orden de siembra:`, err.message || err);
         }
       }
     }
 
-    console.log(`[Seeding] 🚀 Siembra inicial completada: ${seedPlans.length} órdenes límite guardadas en PostgreSQL.`);
+    console.log(`[Seeding] 🚀 Siembra inicial completada: ${seedPlans.length} órdenes límite de siembra intentadas.`);
   } else {
     for (const level of gridManager.getLevels()) {
       await repository.upsertGridLevel(level.levelIndex, level.price, false);
@@ -421,7 +430,7 @@ async function main() {
       env.MAX_GRID_RANGE_USD.toNumber()
     );
 
-    const newSeedPlans = gridManager.generateSeedOrders(centerPrice, holdingCostBasis);
+    const newSeedPlans = gridManager.generateSeedOrders(centerPrice, holdingCostBasis, liveUsdtFree, liveBtcFree);
     for (const plan of newSeedPlans) {
       try {
         const createdOrder = await exchangeAdapter.createOrder({
