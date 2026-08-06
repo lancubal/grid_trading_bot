@@ -90,6 +90,79 @@ export interface TearSheetReportData {
 }
 
 /**
+ * HELPER CENTRAL DE CÁLCULO DE GANANCIA NETA REALIZADA (GRID FLIPS MATCHING)
+ * Empareja cada orden de VENTA con su correspondiente orden de COMPRA ejecutada
+ * considerando los ajustes de espacio del rango por ATR en cada nivel.
+ */
+function calculateGridNetProfit(filledOrders: Array<{
+  side: string;
+  price: any;
+  amount: any;
+  fee?: any;
+  gridLevelId: number;
+  updatedAt: Date;
+}>): {
+  netProfitUsd: Decimal;
+  totalVolumeUsd: Decimal;
+  totalFeesUsd: Decimal;
+} {
+  let netProfit = new Decimal(0);
+  let totalVolume = new Decimal(0);
+  let totalFees = new Decimal(0);
+
+  // Ordenar órdenes ejecutadas cronológicamente
+  const sorted = [...filledOrders].sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime());
+
+  // Mapa de Nivel -> Pila de Compras abiertas esperando ser cerradas
+  const buyPoolByLevel = new Map<number, Array<{ price: Decimal; amount: Decimal; fee: Decimal }>>();
+
+  for (const ord of sorted) {
+    const price = new Decimal(ord.price.toString());
+    const amount = new Decimal(ord.amount.toString());
+    const fee = ord.fee ? new Decimal(ord.fee.toString()) : price.times(amount).times(0.0005);
+
+    totalVolume = totalVolume.plus(price.times(amount));
+    totalFees = totalFees.plus(fee);
+
+    if (ord.side === 'BUY') {
+      const list = buyPoolByLevel.get(ord.gridLevelId) || [];
+      list.push({ price, amount, fee });
+      buyPoolByLevel.set(ord.gridLevelId, list);
+    } else if (ord.side === 'SELL') {
+      // En grid trading, una venta en el nivel L vendió inventario comprado en el nivel L-1 (o L)
+      const targetLevel = ord.gridLevelId - 1;
+      const list = buyPoolByLevel.get(targetLevel) || buyPoolByLevel.get(ord.gridLevelId) || [];
+
+      let buyPrice: Decimal;
+      let buyFee: Decimal;
+
+      if (list.length > 0) {
+        // Emparejar con la orden de compra real de PostgreSQL conservando el precio exacto con ATR
+        const matchedBuy = list.pop()!;
+        buyPrice = matchedBuy.price;
+        buyFee = matchedBuy.fee;
+      } else {
+        // Fallback estimado uniforme (paso predeterminado de grilla 0.25%)
+        buyPrice = price.dividedBy(1.0025);
+        buyFee = buyPrice.times(amount).times(0.0005);
+      }
+
+      const grossSpread = price.minus(buyPrice).times(amount);
+      const cycleNet = grossSpread.minus(buyFee).minus(fee);
+      if (cycleNet.greaterThan(0)) {
+        netProfit = netProfit.plus(cycleNet);
+      }
+    }
+  }
+
+  return {
+    netProfitUsd: netProfit,
+    totalVolumeUsd: totalVolume,
+    totalFeesUsd: totalFees,
+  };
+}
+
+/**
  * 1. Obtener KPIs y Balance Total (Módulo A & C)
  */
 export async function getDashboardStats(): Promise<DashboardStats> {
@@ -115,51 +188,14 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     const filledOrders = await prisma.order.findMany({
       where: { status: 'FILLED' },
       orderBy: { updatedAt: 'asc' },
-      select: { side: true, price: true, amount: true, fee: true, gridLevelId: true, createdAt: true },
+      select: { side: true, price: true, amount: true, fee: true, gridLevelId: true, updatedAt: true },
     }).catch((err) => {
       console.warn('Advertencia leyendo filledOrders:', err);
       return [];
     });
 
-    const buyOrders = filledOrders.filter((o) => o.side === 'BUY');
-    const sellOrders = filledOrders.filter((o) => o.side === 'SELL');
-    const completedFlips = sellOrders.length;
-
-    let netProfitUsd = new Decimal(0);
-    let totalVolumeUsd = new Decimal(0);
-    let totalFees = new Decimal(0);
-
-    for (const ord of filledOrders) {
-      const price = new Decimal(ord.price.toString());
-      const amount = new Decimal(ord.amount.toString());
-      const fee = ord.fee ? new Decimal(ord.fee.toString()) : price.times(amount).times(0.0005);
-      totalFees = totalFees.plus(fee);
-      totalVolumeUsd = totalVolumeUsd.plus(price.times(amount));
-    }
-
-    if (sellOrders.length > 0) {
-      for (const sell of sellOrders) {
-        const sellPrice = new Decimal(sell.price.toString());
-        const amount = new Decimal(sell.amount.toString());
-
-        const matchingBuy = buyOrders.find(
-          (b) => b.gridLevelId === sell.gridLevelId - 1 || b.gridLevelId === sell.gridLevelId
-        );
-
-        const buyPrice = matchingBuy
-          ? new Decimal(matchingBuy.price.toString())
-          : sellPrice.dividedBy(1.0033);
-
-        const grossSpread = sellPrice.minus(buyPrice).times(amount);
-        const buyFee = buyPrice.times(amount).times(0.0005);
-        const sellFee = sellPrice.times(amount).times(0.0005);
-
-        const cycleNet = grossSpread.minus(buyFee).minus(sellFee);
-        if (cycleNet.greaterThan(0)) {
-          netProfitUsd = netProfitUsd.plus(cycleNet);
-        }
-      }
-    }
+    const sellOrdersCount = filledOrders.filter((o) => o.side === 'SELL').length;
+    const { netProfitUsd, totalVolumeUsd, totalFeesUsd } = calculateGridNetProfit(filledOrders);
 
     const roiPercent = initialInvestment.isZero()
       ? 0
@@ -184,9 +220,9 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     return {
       netProfitUsd: Number(netProfitUsd.toFixed(2)),
       roiPercent: Number(roiPercent.toFixed(2)),
-      totalFlips: completedFlips,
+      totalFlips: sellOrdersCount,
       totalVolumeUsd: Number(totalVolumeUsd.toFixed(2)),
-      totalFeesPaidUsd: Number(totalFees.toFixed(4)),
+      totalFeesPaidUsd: Number(totalFeesUsd.toFixed(4)),
       botStatus: 'OPERANDO',
       isDryRun: process.env.DRY_RUN !== 'false',
       atrValue: 283.68,
@@ -350,24 +386,12 @@ export async function generatePerformanceReport(periodKey: '24h' | '7d' | '30d' 
     const buyOrders = filledOrders.filter((o) => o.side === 'BUY');
     const sellOrders = filledOrders.filter((o) => o.side === 'SELL');
 
-    let netProfitUsd = new Decimal(0);
-    let totalVolumeUsd = new Decimal(0);
-    let totalFees = new Decimal(0);
+    const { netProfitUsd, totalVolumeUsd, totalFeesUsd } = calculateGridNetProfit(filledOrders);
+
     let totalLifeTimeMs = 0;
     let matchedCount = 0;
 
-    for (const ord of filledOrders) {
-      const price = new Decimal(ord.price.toString());
-      const amount = new Decimal(ord.amount.toString());
-      const fee = ord.fee ? new Decimal(ord.fee.toString()) : price.times(amount).times(0.0005);
-      totalFees = totalFees.plus(fee);
-      totalVolumeUsd = totalVolumeUsd.plus(price.times(amount));
-    }
-
     for (const sell of sellOrders) {
-      const sellPrice = new Decimal(sell.price.toString());
-      const amount = new Decimal(sell.amount.toString());
-
       const matchingBuy = buyOrders.find(
         (b) => (b.gridLevelId === sell.gridLevelId - 1 || b.gridLevelId === sell.gridLevelId) && b.updatedAt.getTime() <= sell.updatedAt.getTime()
       );
@@ -378,16 +402,6 @@ export async function generatePerformanceReport(periodKey: '24h' | '7d' | '30d' 
           totalLifeTimeMs += diffMs;
           matchedCount++;
         }
-      }
-
-      const buyPrice = matchingBuy ? new Decimal(matchingBuy.price.toString()) : sellPrice.dividedBy(1.0033);
-      const grossSpread = sellPrice.minus(buyPrice).times(amount);
-      const buyFee = buyPrice.times(amount).times(0.0005);
-      const sellFee = sellPrice.times(amount).times(0.0005);
-
-      const cycleNet = grossSpread.minus(buyFee).minus(sellFee);
-      if (cycleNet.greaterThan(0)) {
-        netProfitUsd = netProfitUsd.plus(cycleNet);
       }
     }
 
@@ -409,7 +423,7 @@ export async function generatePerformanceReport(periodKey: '24h' | '7d' | '30d' 
       const dateKey = sell.updatedAt.toISOString().slice(0, 10);
       const existing = dailyMap.get(dateKey) || { count: 0, profit: new Decimal(0) };
       existing.count += 1;
-      existing.profit = existing.profit.plus(0.42);
+      existing.profit = existing.profit.plus(0.166);
       dailyMap.set(dateKey, existing);
     }
 
@@ -455,7 +469,7 @@ export async function generatePerformanceReport(periodKey: '24h' | '7d' | '30d' 
 | **Flips Completados** | ${sellOrders.length} Ciclos |
 | **Órdenes de Compra Ejecutadas** | ${buyOrders.length} Compras |
 | **Volumen Total Transaccionado** | $${totalVolumeUsd.toFixed(2)} USD |
-| **Comisiones Maker Pagadas** | $${totalFees.toFixed(4)} USD |
+| **Comisiones Maker Pagadas** | $${totalFeesUsd.toFixed(4)} USD |
 
 ---
 
@@ -477,7 +491,7 @@ export async function generatePerformanceReport(periodKey: '24h' | '7d' | '30d' 
         roiPercent: Number(roiPercent.toFixed(2)),
         totalFlips: sellOrders.length,
         totalVolumeUsd: Number(totalVolumeUsd.toFixed(2)),
-        totalFeesPaidUsd: Number(totalFees.toFixed(4)),
+        totalFeesPaidUsd: Number(totalFeesUsd.toFixed(4)),
         avgFlipLifecycleMins,
         capitalEfficiencyPercent,
         flipsPerDay,
@@ -642,10 +656,6 @@ export async function getProfitPerformanceChartData(
 
       let usdtCash = initialUsdt;
       let heldBtc = initialBtc;
-      let botProfitNet = new Decimal(0);
-
-      const buyOrders = ordersUpToT.filter((o) => o.side === 'BUY');
-      const sellOrders = ordersUpToT.filter((o) => o.side === 'SELL');
 
       for (const ord of ordersUpToT) {
         const price = new Decimal(ord.price.toString());
@@ -661,24 +671,7 @@ export async function getProfitPerformanceChartData(
         }
       }
 
-      for (const sell of sellOrders) {
-        const sellPrice = new Decimal(sell.price.toString());
-        const amount = new Decimal(sell.amount.toString());
-
-        const matchingBuy = buyOrders.find(
-          (b) => (b.gridLevelId === sell.gridLevelId - 1 || b.gridLevelId === sell.gridLevelId) && b.updatedAt.getTime() <= sell.updatedAt.getTime()
-        );
-
-        const buyPrice = matchingBuy ? new Decimal(matchingBuy.price.toString()) : sellPrice.dividedBy(1.0033);
-        const grossSpread = sellPrice.minus(buyPrice).times(amount);
-        const buyFee = buyPrice.times(amount).times(0.0005);
-        const sellFee = sellPrice.times(amount).times(0.0005);
-
-        const cycleNet = grossSpread.minus(buyFee).minus(sellFee);
-        if (cycleNet.greaterThan(0)) {
-          botProfitNet = botProfitNet.plus(cycleNet);
-        }
-      }
+      const { netProfitUsd: botProfitNet } = calculateGridNetProfit(ordersUpToT);
 
       const lastOrderAtT = ordersUpToT[ordersUpToT.length - 1];
       const btcPrice = lastOrderAtT ? new Decimal(lastOrderAtT.price.toString()) : startPrice;
@@ -807,31 +800,49 @@ export async function getGridLadder() {
 }
 
 /**
- * 6. Obtener los últimos Flips completados (Módulo D)
+ * 6. Obtener el historial reciente de Flips ejecutados (Módulo D)
  */
 export async function getRecentFlips(limit: number = 20) {
   try {
     const filledOrders = await prisma.order.findMany({
       where: { status: 'FILLED' },
       orderBy: { updatedAt: 'desc' },
-      take: limit,
-      include: { gridLevel: true },
+      take: limit * 2,
     }).catch(() => []);
 
-    return filledOrders.map((ord: any) => ({
-      id: ord.id,
-      exchangeId: ord.exchangeId || ord.id.slice(0, 8),
-      symbol: ord.symbol,
-      side: ord.side,
-      price: Number(ord.price),
-      amount: Number(ord.amount),
-      fee: ord.fee ? Number(ord.fee) : Number(ord.price) * Number(ord.amount) * 0.0005,
-      feeCurrency: ord.feeCurrency || 'USDT',
-      feeCost: ord.feeCost ? Number(ord.feeCost) : null,
-      netGain: Number(ord.price) * 0.0033 * 0.0011,
-      gridLevelIndex: ord.gridLevelId,
-      updatedAt: ord.updatedAt.toISOString(),
-    }));
+    const sellOrders = filledOrders.filter((o) => o.side === 'SELL').slice(0, limit);
+
+    return sellOrders.map((sell) => {
+      const matchingBuy = filledOrders.find(
+        (b) => b.side === 'BUY' && (b.gridLevelId === sell.gridLevelId - 1 || b.gridLevelId === sell.gridLevelId) && b.updatedAt <= sell.updatedAt
+      );
+
+      const sellPrice = new Decimal(sell.price.toString());
+      const buyPrice = matchingBuy
+        ? new Decimal(matchingBuy.price.toString())
+        : sellPrice.dividedBy(1.0025);
+      const amount = new Decimal(sell.amount.toString());
+
+      const grossGain = sellPrice.minus(buyPrice).times(amount);
+      const buyFee = buyPrice.times(amount).times(0.0005);
+      const sellFee = sellPrice.times(amount).times(0.0005);
+      const netGain = grossGain.minus(buyFee).minus(sellFee);
+
+      return {
+        id: sell.id,
+        exchangeId: sell.exchangeId || sell.id.slice(0, 8),
+        symbol: sell.symbol,
+        side: sell.side,
+        price: Number(sellPrice),
+        amount: Number(amount),
+        fee: sell.fee ? Number(sell.fee) : Number(sellFee),
+        feeCurrency: sell.feeCurrency || 'USDT',
+        feeCost: sell.feeCost ? Number(sell.feeCost) : null,
+        netGain: Number(netGain.toFixed(4)),
+        gridLevelIndex: sell.gridLevelId,
+        updatedAt: sell.updatedAt.toISOString(),
+      };
+    });
   } catch (err) {
     console.error('Error fetching recent flips:', err);
     return [];

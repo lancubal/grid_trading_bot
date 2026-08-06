@@ -161,6 +161,11 @@ export function ProfitPerformanceChart() {
     ? `$${Math.round(data.initialInvestment).toLocaleString()}`
     : '$1,000';
 
+  const timeframeLabel =
+    timeframe === 'all'
+      ? 'Histórico Completo'
+      : `Últimos ${timeframe.toUpperCase()}`;
+
   return (
     <div className="glass-panel p-5 rounded-xl space-y-4 border border-slate-800 bg-slate-900/60 shadow-xl">
       {/* 1. Header con Selectores de Modo y Temporalidad */}
@@ -226,7 +231,7 @@ export function ProfitPerformanceChart() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="bg-slate-950/70 p-3 rounded-lg border border-slate-800/80 space-y-1">
           <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>{viewMode === 'REALIZED_PROFIT' ? 'Ganancia Neta Limpia' : 'Alpha vs HODL'}</span>
+            <span>{viewMode === 'REALIZED_PROFIT' ? `Ganancia Neta (${timeframeLabel})` : 'Alpha vs HODL'}</span>
             {viewMode === 'REALIZED_PROFIT' ? (
               <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
             ) : (
@@ -242,7 +247,7 @@ export function ProfitPerformanceChart() {
           </div>
           <p className="text-[10px] text-slate-400">
             {viewMode === 'REALIZED_PROFIT'
-              ? 'Efectivo neto acumulado en USDT por flips cerrados'
+              ? `Efectivo neto acumulado en USDT (${timeframeLabel})`
               : `Ganancia extra vs haber dejado los ${initialCapitalStr} en HODL (${data && data.latestAlphaPercent >= 0 ? '+' : ''}${data?.latestAlphaPercent.toFixed(2)}%)`}
           </p>
         </div>
@@ -293,7 +298,7 @@ export function ProfitPerformanceChart() {
               }`}
             />
             <span className="text-slate-200 font-medium">
-              {viewMode === 'REALIZED_PROFIT' ? 'Ganancia Realizada Acumulada ($ USDT)' : 'Curva Bot (Patrimonio Total)'}
+              {viewMode === 'REALIZED_PROFIT' ? `Ganancia Realizada (${timeframeLabel})` : 'Curva Bot (Patrimonio Total)'}
             </span>
           </div>
 
