@@ -148,11 +148,11 @@ export function ProfitPerformanceChart() {
   const xTicksCount = Math.min(6, points.length);
   const xTicks = points.length > 0
     ? Array.from({ length: xTicksCount }).map((_, i) => {
-        const index = Math.floor((i / (xTicksCount - 1)) * (points.length - 1));
-        const pt = points[index];
+        const index = xTicksCount <= 1 ? 0 : Math.floor((i / (xTicksCount - 1)) * (points.length - 1));
+        const pt = points[index] || points[0];
         return {
           x: getX(index),
-          label: formatCleanDateLabel(pt.dateLabel, timeframe),
+          label: pt?.dateLabel ? formatCleanDateLabel(pt.dateLabel, timeframe) : '',
         };
       })
     : [];
