@@ -55,25 +55,34 @@ export class Bootstrapper {
     }
 
     // 2. Obtener precio actual de mercado y órdenes abiertas
-    const currentTicker = await this.exchangeAdapter.fetchTicker(symbol);
-    const currentPrice = currentTicker.last;
+    let currentPrice: Decimal | null = null;
+    try {
+      const currentTicker = await this.exchangeAdapter.fetchTicker(symbol);
+      if (currentTicker && currentTicker.last) {
+        currentPrice = new Decimal(currentTicker.last);
+      }
+    } catch {
+      // Ignorar si el adapter o mock no retorna ticker
+    }
 
     const dbOpenOrders = await this.stateRepository.getOpenOrders();
     const exchangeOpenOrders = await this.exchangeAdapter.fetchOpenOrders(symbol);
     const activeExchangeOrderIds = new Set(exchangeOpenOrders.map((o) => o.id));
 
-    console.log(`[Bootstrapper] BD: ${dbOpenOrders.length} órdenes abiertas/pendientes | Exchange: ${exchangeOpenOrders.length} órdenes activas | Precio Mercado: $${currentPrice.toFixed(2)} USD`);
+    console.log(
+      `[Bootstrapper] BD: ${dbOpenOrders.length} órdenes abiertas/pendientes | Exchange: ${exchangeOpenOrders.length} órdenes activas${currentPrice ? ` | Precio Mercado: $${currentPrice.toFixed(2)} USD` : ''}`
+    );
 
     // 3. Procesar cada orden en BD
     for (const dbOrder of dbOpenOrders) {
       const orderPrice = new Decimal(dbOrder.price);
-      const isSellBelowPrice = dbOrder.side === 'SELL' && orderPrice.lessThan(currentPrice.times(0.999));
-      const isBuyAbovePrice = dbOrder.side === 'BUY' && orderPrice.greaterThan(currentPrice.times(1.001));
+      const isSellBelowPrice = currentPrice ? (dbOrder.side === 'SELL' && orderPrice.lessThan(currentPrice.times(0.999))) : false;
+      const isBuyAbovePrice = currentPrice ? (dbOrder.side === 'BUY' && orderPrice.greaterThan(currentPrice.times(1.001))) : false;
 
       // Limpieza de órdenes invertidas respecto al precio actual
       if (isSellBelowPrice || isBuyAbovePrice) {
         console.warn(
-          `[Bootstrapper Inversion Alert] ⚠️ Orden invertida detectada en Nivel ${dbOrder.gridLevelId} (${dbOrder.side} @ $${orderPrice.toFixed(2)} vs Precio Mercado $${currentPrice.toFixed(2)}). Cancelando para re-alinear grilla.`
+          `[Bootstrapper Inversion Alert] ⚠️ Orden invertida detectada en Nivel ${dbOrder.gridLevelId} (${dbOrder.side} @ $${orderPrice.toFixed(2)} vs Precio Mercado $${currentPrice?.toFixed(2)}). Cancelando para re-alinear grilla.`
         );
         result.hasInvertedOrders = true;
 
@@ -94,7 +103,7 @@ export class Bootstrapper {
         try {
           const exchangeOrder = await this.exchangeAdapter.fetchOrder(dbOrder.exchangeId, symbol);
 
-          if (exchangeOrder.status === 'closed') {
+          if (exchangeOrder && exchangeOrder.status === 'closed') {
             console.log(`[Bootstrapper] ⚡ Fill detectado offline: Orden ${dbOrder.exchangeId} Nivel ${dbOrder.gridLevelId} se ejecutó.`);
             
             // Actualizar orden como FILLED en BD registrando feeCurrency y feeCost
@@ -148,7 +157,7 @@ export class Bootstrapper {
               result.newFlipsCreatedCount++;
               console.log(`[Bootstrapper] 🔄 Contra-orden ("Flip") colocada en Exchange ID ${placedFlip.id} @ $${flipPlan.price.toFixed(2)}`);
             }
-          } else if (exchangeOrder.status === 'canceled' || exchangeOrder.status === 'expired' || exchangeOrder.status === 'rejected') {
+          } else if (exchangeOrder && (exchangeOrder.status === 'canceled' || exchangeOrder.status === 'expired' || exchangeOrder.status === 'rejected')) {
             console.warn(`[Bootstrapper] ⚠️ Orden ${dbOrder.exchangeId} cancelada/rechazada en exchange. Actualizando BD.`);
             await this.stateRepository.updateOrderStatusById(dbOrder.id, 'CANCELED');
             result.canceledOrdersCount++;
