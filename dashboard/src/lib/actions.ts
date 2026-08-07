@@ -797,7 +797,7 @@ export async function getGridLadder() {
 
     return levels.map((lvl) => {
       const activeOrder = lvl.orders[0];
-      const isHolding = lvl.isHolding || (activeOrder ? activeOrder.side === 'SELL' : false);
+      const isHolding = activeOrder ? activeOrder.side === 'SELL' : lvl.isHolding;
 
       return {
         id: `level-${lvl.levelIndex}`,

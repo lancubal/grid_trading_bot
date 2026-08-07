@@ -384,7 +384,9 @@ async function main() {
     console.log(`[Seeding] 🚀 Siembra inicial completada: ${seedPlans.length} órdenes límite de siembra intentadas.`);
   } else {
     for (const level of gridManager.getLevels()) {
-      await repository.upsertGridLevel(level.levelIndex, level.price, false);
+      const activeOrder = openOrdersInDb.find((o) => o.gridLevelId === level.levelIndex);
+      const isHolding = activeOrder ? activeOrder.side === OrderSide.SELL : false;
+      await repository.upsertGridLevel(level.levelIndex, level.price, isHolding);
     }
   }
 
