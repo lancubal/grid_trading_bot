@@ -205,17 +205,38 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       orderBy: { price: 'asc' },
     }).catch(() => []);
 
+    const openOrders = await prisma.order.findMany({
+      where: { status: 'OPEN' },
+    }).catch(() => []);
+
     let minRange = 63000;
     let maxRange = 66000;
-    let btcBalance = 0;
-    let usdtBalance = initialInvestment.toNumber();
+    let btcBalanceAcc = new Decimal(0);
+    let usdtBalanceAcc = new Decimal(0);
 
     if (gridLevels.length > 0) {
       minRange = Number(gridLevels[0].price);
       maxRange = Number(gridLevels[gridLevels.length - 1].price);
-      btcBalance = gridLevels.filter((g) => g.isHolding).length * 0.0011;
-      usdtBalance = Math.max(0, initialInvestment.toNumber() - btcBalance * minRange);
     }
+
+    for (const ord of openOrders) {
+      const price = new Decimal(ord.price.toString());
+      const amount = new Decimal(ord.amount.toString());
+      if (ord.side === 'SELL') {
+        btcBalanceAcc = btcBalanceAcc.plus(amount);
+      } else if (ord.side === 'BUY') {
+        usdtBalanceAcc = usdtBalanceAcc.plus(price.times(amount));
+      }
+    }
+
+    const holdingCount = gridLevels.filter((g) => g.isHolding).length;
+    const btcBalance = btcBalanceAcc.greaterThan(0)
+      ? btcBalanceAcc.toNumber()
+      : holdingCount * 0.00155;
+
+    const usdtBalance = usdtBalanceAcc.greaterThan(0)
+      ? usdtBalanceAcc.toNumber()
+      : Math.max(0, initialInvestment.toNumber() - btcBalance * minRange);
 
     return {
       netProfitUsd: Number(netProfitUsd.toFixed(2)),
