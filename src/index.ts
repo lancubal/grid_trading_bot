@@ -229,6 +229,83 @@ async function main() {
     return false;
   };
 
+  // Función reutilizable de Rebalance de Grilla
+  const performGridRebalance = async (newAtr: Decimal, targetPrice?: Decimal) => {
+    if (circuitBreaker.getStatus().isTripped) {
+      console.warn(`[Rebalance Suspended] 🛑 Re-ajuste por volatilidad ATR pausado temporalmente por Cortacircuitos activo.`);
+      return;
+    }
+
+    const latestTicker = await exchangeAdapter.fetchTicker(symbol);
+    const centerPrice = targetPrice ?? latestTicker.last;
+    const highestGridLevel = gridManager.getConfig().upperPrice;
+
+    // Evaluaciones de Bloqueo FOMO (Escudo Anti-Comprar la Cima de un Pump)
+    const fomoCheck = fomoGuard.checkFomoRisk(centerPrice, highestGridLevel);
+    if (fomoCheck.isBlocked) {
+      console.warn(`[FomoGuard Trigger] 🛑 ${fomoCheck.message}`);
+      return;
+    }
+
+    console.log(`\n[Rebalance Trigger] ⚡ Re-ajustando grilla en torno al precio $${centerPrice.toFixed(2)} USD (ATR: $${newAtr.toFixed(2)} USD)...`);
+
+    // Obtener los costos de compra del inventario retenido antes de cancelar
+    const currentOpenOrders = await repository.getOpenOrders();
+    const holdingCostBasis: Decimal[] = [];
+
+    for (const ord of currentOpenOrders) {
+      if (ord.side === OrderSide.SELL) {
+        holdingCostBasis.push(new Decimal(ord.price));
+      }
+      if (ord.exchangeId) {
+        await exchangeAdapter.cancelOrder(ord.exchangeId, symbol);
+        await repository.updateOrderStatusById(ord.id, OrderStatus.CANCELED);
+      }
+    }
+
+    const rebalanced = gridManager.adjustToVolatility(
+      newAtr,
+      centerPrice,
+      4.0,
+      env.MIN_GRID_RANGE_USD.toNumber(),
+      env.MAX_GRID_RANGE_USD.toNumber()
+    );
+
+    const newSeedPlans = gridManager.generateSeedOrders(centerPrice, holdingCostBasis, liveUsdtFree, liveBtcFree);
+    for (const plan of newSeedPlans) {
+      try {
+        const createdOrder = await exchangeAdapter.createOrder({
+          symbol,
+          type: 'limit',
+          side: plan.side,
+          amount: plan.amount,
+          price: plan.price,
+        });
+
+        await repository.upsertGridLevel(plan.levelIndex, plan.price, plan.side === 'sell');
+
+        await repository.createOrderRecord({
+          exchangeId: createdOrder.id,
+          symbol: createdOrder.symbol,
+          side: plan.side === 'buy' ? OrderSide.BUY : OrderSide.SELL,
+          price: createdOrder.price,
+          amount: createdOrder.amount,
+          gridLevelId: plan.levelIndex,
+          status: OrderStatus.OPEN,
+        });
+      } catch (err: any) {
+        if (isInsufficientFundsError(err)) {
+          console.warn(`[Rebalance Insufficient Funds Alert] 🚨 Binance rechazó orden re-sembrada por saldo insuficiente (-2010). Disparando Alerta de Sed...`);
+          await checkAndExecuteAutoInjection(true);
+        } else {
+          console.error(`[Rebalance Order Error] Error al crear orden re-sembrada:`, err.message || err);
+        }
+      }
+    }
+
+    console.log(`[Rebalance Complete] ✨ Grilla Re-ajustada: Nuevo rango $${rebalanced.newLowerPrice.toFixed(2)} - $${rebalanced.newUpperPrice.toFixed(2)} USD (${newSeedPlans.length} órdenes re-sembradas con Inventory Cost Guard).\n`);
+  };
+
   // Si DRY_RUN === false (Ejecución real en Binance Spot), conectar WebSocket privado watchOrders()
   let exchangeStreams: IExchangeStreams | null = null;
   if (!env.DRY_RUN && env.EXCHANGE_API_KEY && env.EXCHANGE_API_SECRET) {
@@ -324,7 +401,12 @@ async function main() {
 
   // 8. Ejecutar Reconciliador / Bootstrapper al reiniciar
   const bootstrapper = new Bootstrapper(exchangeAdapter, repository, gridManager);
-  await bootstrapper.reconcile(symbol);
+  const reconcileRes = await bootstrapper.reconcile(symbol);
+
+  if (reconcileRes.hasInvertedOrders) {
+    console.log('[Bootstrapper Inversion Auto-Fix] 🔄 Se detectaron órdenes invertidas. Forzando rebalance limpio de grilla...');
+    await performGridRebalance(initialAtr, currentPrice);
+  }
 
   // 9. Siembra Inicial de Órdenes si es una Grilla Nueva
   const openOrdersInDb = await repository.getOpenOrders();
@@ -389,83 +471,6 @@ async function main() {
       await repository.upsertGridLevel(level.levelIndex, level.price, isHolding);
     }
   }
-
-  // 10. Función reutilizable de Rebalance de Grilla
-  const performGridRebalance = async (newAtr: Decimal, targetPrice?: Decimal) => {
-    if (circuitBreaker.getStatus().isTripped) {
-      console.warn(`[Rebalance Suspended] 🛑 Re-ajuste por volatilidad ATR pausado temporalmente por Cortacircuitos activo.`);
-      return;
-    }
-
-    const latestTicker = await exchangeAdapter.fetchTicker(symbol);
-    const centerPrice = targetPrice ?? latestTicker.last;
-    const highestGridLevel = gridManager.getConfig().upperPrice;
-
-    // Evaluaciones de Bloqueo FOMO (Escudo Anti-Comprar la Cima de un Pump)
-    const fomoCheck = fomoGuard.checkFomoRisk(centerPrice, highestGridLevel);
-    if (fomoCheck.isBlocked) {
-      console.warn(`[FomoGuard Trigger] 🛑 ${fomoCheck.message}`);
-      return;
-    }
-
-    console.log(`\n[Rebalance Trigger] ⚡ Re-ajustando grilla en torno al precio $${centerPrice.toFixed(2)} USD (ATR: $${newAtr.toFixed(2)} USD)...`);
-
-    // Obtener los costos de compra del inventario retenido antes de cancelar
-    const currentOpenOrders = await repository.getOpenOrders();
-    const holdingCostBasis: Decimal[] = [];
-
-    for (const ord of currentOpenOrders) {
-      if (ord.side === OrderSide.SELL) {
-        holdingCostBasis.push(new Decimal(ord.price));
-      }
-      if (ord.exchangeId) {
-        await exchangeAdapter.cancelOrder(ord.exchangeId, symbol);
-        await repository.updateOrderStatusById(ord.id, OrderStatus.CANCELED);
-      }
-    }
-
-    const rebalanced = gridManager.adjustToVolatility(
-      newAtr,
-      centerPrice,
-      4.0,
-      env.MIN_GRID_RANGE_USD.toNumber(),
-      env.MAX_GRID_RANGE_USD.toNumber()
-    );
-
-    const newSeedPlans = gridManager.generateSeedOrders(centerPrice, holdingCostBasis, liveUsdtFree, liveBtcFree);
-    for (const plan of newSeedPlans) {
-      try {
-        const createdOrder = await exchangeAdapter.createOrder({
-          symbol,
-          type: 'limit',
-          side: plan.side,
-          amount: plan.amount,
-          price: plan.price,
-        });
-
-        await repository.upsertGridLevel(plan.levelIndex, plan.price, plan.side === 'sell');
-
-        await repository.createOrderRecord({
-          exchangeId: createdOrder.id,
-          symbol: createdOrder.symbol,
-          side: plan.side === 'buy' ? OrderSide.BUY : OrderSide.SELL,
-          price: createdOrder.price,
-          amount: createdOrder.amount,
-          gridLevelId: plan.levelIndex,
-          status: OrderStatus.OPEN,
-        });
-      } catch (err: any) {
-        if (isInsufficientFundsError(err)) {
-          console.warn(`[Rebalance Insufficient Funds Alert] 🚨 Binance rechazó orden re-sembrada por saldo insuficiente (-2010). Disparando Alerta de Sed...`);
-          await checkAndExecuteAutoInjection(true);
-        } else {
-          console.error(`[Rebalance Order Error] Error al crear orden re-sembrada:`, err.message || err);
-        }
-      }
-    }
-
-    console.log(`[Rebalance Complete] ✨ Grilla Re-ajustada: Nuevo rango $${rebalanced.newLowerPrice.toFixed(2)} - $${rebalanced.newUpperPrice.toFixed(2)} USD (${newSeedPlans.length} órdenes re-sembradas con Inventory Cost Guard).\n`);
-  };
 
   volatilityEngine.on('VOLATILITY_CHANGE', async (newAtr: Decimal) => {
     await performGridRebalance(newAtr);

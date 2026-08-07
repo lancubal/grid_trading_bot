@@ -9,6 +9,7 @@ export interface ReconcileResult {
   newFlipsCreatedCount: number;
   canceledOrdersCount: number;
   isFreshGrid: boolean;
+  hasInvertedOrders: boolean;
 }
 
 /**
@@ -42,6 +43,7 @@ export class Bootstrapper {
       newFlipsCreatedCount: 0,
       canceledOrdersCount: 0,
       isFreshGrid: false,
+      hasInvertedOrders: false,
     };
 
     // 1. Verificar si existen niveles registrados en BD
@@ -52,15 +54,37 @@ export class Bootstrapper {
       return result;
     }
 
-    // 2. Obtener órdenes pendientes/abiertas en BD y órdenes abiertas en Exchange
+    // 2. Obtener precio actual de mercado y órdenes abiertas
+    const currentTicker = await this.exchangeAdapter.fetchTicker(symbol);
+    const currentPrice = currentTicker.last;
+
     const dbOpenOrders = await this.stateRepository.getOpenOrders();
     const exchangeOpenOrders = await this.exchangeAdapter.fetchOpenOrders(symbol);
     const activeExchangeOrderIds = new Set(exchangeOpenOrders.map((o) => o.id));
 
-    console.log(`[Bootstrapper] BD: ${dbOpenOrders.length} órdenes abiertas/pendientes | Exchange: ${exchangeOpenOrders.length} órdenes activas`);
+    console.log(`[Bootstrapper] BD: ${dbOpenOrders.length} órdenes abiertas/pendientes | Exchange: ${exchangeOpenOrders.length} órdenes activas | Precio Mercado: $${currentPrice.toFixed(2)} USD`);
 
     // 3. Procesar cada orden en BD
     for (const dbOrder of dbOpenOrders) {
+      const orderPrice = new Decimal(dbOrder.price);
+      const isSellBelowPrice = dbOrder.side === 'SELL' && orderPrice.lessThan(currentPrice.times(0.999));
+      const isBuyAbovePrice = dbOrder.side === 'BUY' && orderPrice.greaterThan(currentPrice.times(1.001));
+
+      // Limpieza de órdenes invertidas respecto al precio actual
+      if (isSellBelowPrice || isBuyAbovePrice) {
+        console.warn(
+          `[Bootstrapper Inversion Alert] ⚠️ Orden invertida detectada en Nivel ${dbOrder.gridLevelId} (${dbOrder.side} @ $${orderPrice.toFixed(2)} vs Precio Mercado $${currentPrice.toFixed(2)}). Cancelando para re-alinear grilla.`
+        );
+        result.hasInvertedOrders = true;
+
+        if (dbOrder.exchangeId) {
+          await this.exchangeAdapter.cancelOrder(dbOrder.exchangeId, symbol);
+        }
+        await this.stateRepository.updateOrderStatusById(dbOrder.id, 'CANCELED');
+        result.canceledOrdersCount++;
+        continue;
+      }
+
       if (dbOrder.exchangeId && activeExchangeOrderIds.has(dbOrder.exchangeId)) {
         // Caso A: La orden sigue abierta en el exchange -> Estado intacto
         result.restoredOpenOrdersCount++;
@@ -152,7 +176,7 @@ export class Bootstrapper {
       }
     }
 
-    console.log(`[Bootstrapper] ✨ Reconciliación completada: ${result.restoredOpenOrdersCount} restauradas, ${result.offlineFillsCount} fills offline, ${result.newFlipsCreatedCount} flips creados.`);
+    console.log(`[Bootstrapper] ✨ Reconciliación completada: ${result.restoredOpenOrdersCount} restauradas, ${result.offlineFillsCount} fills offline, ${result.canceledOrdersCount} canceladas, ${result.newFlipsCreatedCount} flips creados.`);
     return result;
   }
 }
