@@ -263,6 +263,18 @@ async function main() {
       }
     }
 
+    // Re-consultar saldos libres reales en Binance tras cancelar órdenes
+    if (!env.DRY_RUN) {
+      try {
+        const bal = await exchangeAdapter.fetchBalance();
+        liveUsdtFree = bal.free['USDT'] ? new Decimal(bal.free['USDT']) : undefined;
+        liveBtcFree = bal.free['BTC'] ? new Decimal(bal.free['BTC']) : undefined;
+        console.log(`[Rebalance Balance Refresh] 💰 Saldo libre actualizado post-cancelación: $${liveUsdtFree?.toFixed(2)} USDT | ${liveBtcFree?.toFixed(6)} BTC`);
+      } catch (err) {
+        console.warn('[Rebalance Balance Warning] Error al refrescar balance:', err);
+      }
+    }
+
     const rebalanced = gridManager.adjustToVolatility(
       newAtr,
       centerPrice,
