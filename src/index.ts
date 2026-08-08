@@ -534,6 +534,35 @@ async function main() {
         await checkAndExecuteAutoInjection(false);
       }
 
+      // MONITOREO DE BRECHAS ("NO MAN'S LAND GAP RECENTER GUARD")
+      if (tickCount % 60 === 0 && !circuitBreaker.getStatus().isTripped && !fomoGuard.getStatus().isBlocked) {
+        const openOrdersNow = await repository.getOpenOrders();
+        let maxBuy = new Decimal(0);
+        let minSell = new Decimal(999999);
+
+        for (const ord of openOrdersNow) {
+          const priceDec = new Decimal(ord.price);
+          if (ord.side === OrderSide.BUY && priceDec.greaterThan(maxBuy)) {
+            maxBuy = priceDec;
+          }
+          if (ord.side === OrderSide.SELL && priceDec.lessThan(minSell)) {
+            minSell = priceDec;
+          }
+        }
+
+        const stepSize = gridManager.getStepSize();
+        if (maxBuy.greaterThan(0) && minSell.lessThan(999999)) {
+          const gapSize = minSell.minus(maxBuy);
+          if (gapSize.greaterThan(stepSize.times(2.5))) {
+            console.warn(
+              `[Gap Recenter Guard] ⚠️ Brecha excesiva detectada entre compra ($${maxBuy.toFixed(2)}) y venta ($${minSell.toFixed(2)}) (Brecha: $${gapSize.toFixed(2)} USD). Recentrando grilla sin borrar la base de datos...`
+            );
+            const currentAtr = volatilityEngine.getCurrentAtr() || initialAtr;
+            await performGridRebalance(currentAtr, ticker.last);
+          }
+        }
+      }
+
       // EVALUACIÓN DE OUT OF BOUNDS CON RECENTRADO AUTÓNOMO
       const isOutOfBounds = ticker.last.lessThan(gridManager.getConfig().lowerPrice) || ticker.last.greaterThan(gridManager.getConfig().upperPrice);
       if (isOutOfBounds) {
