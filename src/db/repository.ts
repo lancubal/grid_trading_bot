@@ -145,6 +145,16 @@ export class StateRepository {
     });
   }
 
+  /**
+   * Obtiene las órdenes filtradas por su estado (ej. FILLED)
+   */
+  public async getOrdersByStatus(status: OrderStatus) {
+    return this.prisma.order.findMany({
+      where: { status },
+      include: { gridLevel: true },
+    });
+  }
+
   public async disconnect(): Promise<void> {
     await this.prisma.$disconnect();
   }

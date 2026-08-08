@@ -153,6 +153,9 @@ export class GridManager extends EventEmitter {
       minAllowedSellPrice = highestCost.times(new Decimal(1.0015));
     }
 
+    const sellIndexMap = new Map<number, number>();
+    sellLevels.forEach((l, idx) => sellIndexMap.set(l.levelIndex, idx));
+
     for (const level of this.levels) {
       const levelPriceDec = new Decimal(level.price);
 
@@ -168,11 +171,14 @@ export class GridManager extends EventEmitter {
         }
       } else if (levelPriceDec.greaterThan(currentPriceDec)) {
         let finalSellPrice = levelPriceDec;
-        if (holdingCostBasis.length > 0 && finalSellPrice.lessThan(minAllowedSellPrice)) {
+        const sellIdx = sellIndexMap.get(level.levelIndex) ?? 0;
+        const staggeredMinPrice = minAllowedSellPrice.plus(this.stepSize.times(sellIdx));
+
+        if (holdingCostBasis.length > 0 && finalSellPrice.lessThan(staggeredMinPrice)) {
           console.warn(
-            `[Inventory Cost Guard] 🛡️ Orden de VENTA ajustada de $${finalSellPrice.toFixed(2)} a $${minAllowedSellPrice.toFixed(2)} USD para evitar venta a pérdida.`
+            `[Inventory Cost Guard] 🛡️ Orden de VENTA Nivel ${level.levelIndex} escalonada de $${finalSellPrice.toFixed(2)} a $${staggeredMinPrice.toFixed(2)} USD para evitar colapso de precios.`
           );
-          finalSellPrice = minAllowedSellPrice;
+          finalSellPrice = staggeredMinPrice;
         }
 
         const amount = actualSellBtcPerLevel

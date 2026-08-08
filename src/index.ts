@@ -249,14 +249,14 @@ async function main() {
 
     console.log(`\n[Rebalance Trigger] ⚡ Re-ajustando grilla en torno al precio $${centerPrice.toFixed(2)} USD (ATR: $${newAtr.toFixed(2)} USD)...`);
 
-    // Obtener los costos de compra del inventario retenido antes de cancelar
-    const currentOpenOrders = await repository.getOpenOrders();
-    const holdingCostBasis: Decimal[] = [];
+    // Obtener los costos de compra reales del inventario desde ejecuciones pasadas (FILLED)
+    const filledOrders = await repository.getOrdersByStatus(OrderStatus.FILLED);
+    const holdingCostBasis: Decimal[] = filledOrders
+      .filter((o) => o.side === OrderSide.BUY)
+      .map((o) => new Decimal(o.price));
 
+    const currentOpenOrders = await repository.getOpenOrders();
     for (const ord of currentOpenOrders) {
-      if (ord.side === OrderSide.SELL) {
-        holdingCostBasis.push(new Decimal(ord.price));
-      }
       if (ord.exchangeId) {
         await exchangeAdapter.cancelOrder(ord.exchangeId, symbol);
         await repository.updateOrderStatusById(ord.id, OrderStatus.CANCELED);
