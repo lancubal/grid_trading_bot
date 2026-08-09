@@ -497,7 +497,9 @@ async function main() {
 
   let tickCount = 0;
   let lastOobRebalanceTime = 0;
+  let lastGapRebalanceTime = 0;
   const OOB_REBALANCE_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutos de cooldown entre recentrados por fuera de rango
+  const GAP_REBALANCE_COOLDOWN_MS = 60 * 60 * 1000; // 1 hora de cooldown mínimo para el guardián de brechas
 
   const tickerInterval = setInterval(async () => {
     try {
@@ -548,29 +550,33 @@ async function main() {
 
       // MONITOREO DE BRECHAS ("NO MAN'S LAND GAP RECENTER GUARD")
       if (tickCount % 60 === 0 && !circuitBreaker.getStatus().isTripped && !fomoGuard.getStatus().isBlocked) {
-        const openOrdersNow = await repository.getOpenOrders();
-        let maxBuy = new Decimal(0);
-        let minSell = new Decimal(999999);
+        const now = Date.now();
+        if (now - lastGapRebalanceTime >= GAP_REBALANCE_COOLDOWN_MS) {
+          const openOrdersNow = await repository.getOpenOrders();
+          let maxBuy = new Decimal(0);
+          let minSell = new Decimal(999999);
 
-        for (const ord of openOrdersNow) {
-          const priceDec = new Decimal(ord.price);
-          if (ord.side === OrderSide.BUY && priceDec.greaterThan(maxBuy)) {
-            maxBuy = priceDec;
+          for (const ord of openOrdersNow) {
+            const priceDec = new Decimal(ord.price);
+            if (ord.side === OrderSide.BUY && priceDec.greaterThan(maxBuy)) {
+              maxBuy = priceDec;
+            }
+            if (ord.side === OrderSide.SELL && priceDec.lessThan(minSell)) {
+              minSell = priceDec;
+            }
           }
-          if (ord.side === OrderSide.SELL && priceDec.lessThan(minSell)) {
-            minSell = priceDec;
-          }
-        }
 
-        const stepSize = gridManager.getStepSize();
-        if (maxBuy.greaterThan(0) && minSell.lessThan(999999)) {
-          const gapSize = minSell.minus(maxBuy);
-          if (gapSize.greaterThan(stepSize.times(2.5))) {
-            console.warn(
-              `[Gap Recenter Guard] ⚠️ Brecha excesiva detectada entre compra ($${maxBuy.toFixed(2)}) y venta ($${minSell.toFixed(2)}) (Brecha: $${gapSize.toFixed(2)} USD). Recentrando grilla sin borrar la base de datos...`
-            );
-            const currentAtr = volatilityEngine.getCurrentAtr() || initialAtr;
-            await performGridRebalance(currentAtr, ticker.last);
+          const stepSize = gridManager.getStepSize();
+          if (maxBuy.greaterThan(0) && minSell.lessThan(999999)) {
+            const gapSize = minSell.minus(maxBuy);
+            if (gapSize.greaterThan(stepSize.times(4.5))) {
+              lastGapRebalanceTime = now;
+              console.warn(
+                `[Gap Recenter Guard] ⚠️ Brecha excesiva detectada entre compra ($${maxBuy.toFixed(2)}) y venta ($${minSell.toFixed(2)}) (Brecha: $${gapSize.toFixed(2)} USD). Recentrando grilla sin borrar la base de datos...`
+              );
+              const currentAtr = volatilityEngine.getCurrentAtr() || initialAtr;
+              await performGridRebalance(currentAtr, ticker.last);
+            }
           }
         }
       }
