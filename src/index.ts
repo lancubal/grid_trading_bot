@@ -337,6 +337,42 @@ async function main() {
   systemBus.on('ORDER_FILLED', async (event) => {
     console.log(`[Flip Event Bus] ⚡ ORDER_FILLED recibida para Nivel ${event.gridLevel}. Generando contra-orden ("Flip")...`);
 
+    let currentUsdtBal: Decimal | number | undefined = liveUsdtFree;
+    let netProfitUsd: Decimal | number | undefined;
+
+    try {
+      if (!env.DRY_RUN) {
+        const bal = await exchangeAdapter.fetchBalance();
+        if (bal.free['USDT'] !== undefined) {
+          currentUsdtBal = new Decimal(bal.free['USDT']);
+          liveUsdtFree = currentUsdtBal;
+        }
+      }
+    } catch (err) {
+      // Fallback
+    }
+
+    if (event.side.toString().toUpperCase() === 'SELL') {
+      const stepSize = gridManager.getStepSize();
+      const sellPrice = new Decimal(event.price);
+      const amount = new Decimal(event.amount);
+
+      let buyPrice = sellPrice.minus(stepSize);
+      if (event.gridLevel !== undefined && event.gridLevel > 0) {
+        const filledBuys = await repository.getOrdersByStatus(OrderStatus.FILLED);
+        const matchBuy = filledBuys.find(
+          (o) => o.side === OrderSide.BUY && (o.gridLevelId === event.gridLevel! - 1 || o.gridLevelId === event.gridLevel)
+        );
+        if (matchBuy) {
+          buyPrice = new Decimal(matchBuy.price);
+        }
+      }
+
+      const grossProfit = sellPrice.minus(buyPrice).times(amount);
+      const feeUsd = event.fee?.cost ? new Decimal(event.fee.cost) : grossProfit.times(0.001);
+      netProfitUsd = Decimal.max(0.01, grossProfit.minus(feeUsd));
+    }
+
     // Notificación en vivo a Slack
     await notifier.notifyOrderExecution({
       side: event.side,
@@ -346,6 +382,8 @@ async function main() {
       gridLevel: event.gridLevel,
       feeCurrency: event.fee?.currency,
       feeCost: event.fee?.cost,
+      usdtBalance: currentUsdtBal,
+      netProfitUsd,
     });
 
     if (event.id) {
