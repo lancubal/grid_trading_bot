@@ -66,6 +66,8 @@ export class CcxtExchangeStreams extends EventEmitter implements IExchangeStream
     console.log('[ExchangeStreams] 🔌 Conexión de monitoreo cerrada.');
   }
 
+  private processedClosedOrderIds = new Set<string>();
+
   /**
    * Bucle asíncrono para escuchar órdenes ejecutadas via WebSocket o Polling continuo de alta frecuencia
    */
@@ -82,9 +84,26 @@ export class CcxtExchangeStreams extends EventEmitter implements IExchangeStream
             this.processRawOrder(rawOrder);
           }
         } else {
-          // Fallback a polling optimizado de baja latencia (2s) si watchOrders no está en CCXT estándar
+          // Fallback a polling optimizado de baja latencia (2s) de órdenes ejecutadas en Binance
           await new Promise((resolve) => setTimeout(resolve, 2000));
           if (!this.isListening) break;
+
+          try {
+            const closedOrders = await this.exchange.fetchClosedOrders(symbol, undefined, 20);
+            for (const closedOrder of closedOrders) {
+              const orderId = String(closedOrder.id ?? '');
+              const orderSide = String(closedOrder.side ?? 'buy').toUpperCase();
+              if (closedOrder.status === 'closed' && orderId && !this.processedClosedOrderIds.has(orderId)) {
+                this.processedClosedOrderIds.add(orderId);
+                console.log(
+                  `[Order Poller] ⚡ Fill detectado en Binance: ${orderSide} ${closedOrder.amount} BTC @ $${closedOrder.price}`
+                );
+                this.processRawOrder(closedOrder);
+              }
+            }
+          } catch (pollErr: any) {
+            // Ignorar rate-limits o errores temporales de red en el polling
+          }
         }
       } catch (error: any) {
         if (!this.isListening) break;
