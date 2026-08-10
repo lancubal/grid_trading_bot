@@ -333,18 +333,30 @@ async function main() {
     });
   }
 
+  const handledFilledExchangeIds = new Set<string>();
+
   // Listener para realizar el "Flip" cuando se reciba una notificación de orden ejecutada + Alertas a Slack en Tiempo Real
   systemBus.on('ORDER_FILLED', async (event) => {
-    // 🛡️ DEDUPLICACIÓN DE ÓRDENES: Ignorar si la orden ya fue registrada como FILLED en la BD
     if (event.id) {
-      const existingOrder = await repository.getOrderByExchangeId(event.id);
-      if (existingOrder && existingOrder.status === OrderStatus.FILLED) {
-        console.log(`[Order Deduplicator] ℹ️ Orden ${event.id} ya fue procesada como FILLED previamente. Omitiendo duplicado.`);
+      if (handledFilledExchangeIds.has(event.id)) {
+        console.log(`[Order Deduplicator] ℹ️ Orden ${event.id} ya fue procesada sincrónicamente. Omitiendo duplicado.`);
         return;
+      }
+      handledFilledExchangeIds.add(event.id);
+
+      const existingOrder = await repository.getOrderByExchangeId(event.id);
+      if (existingOrder) {
+        if (event.gridLevel === undefined) {
+          event.gridLevel = existingOrder.gridLevelId;
+        }
+        if (existingOrder.status === OrderStatus.FILLED) {
+          console.log(`[Order Deduplicator] ℹ️ Orden ${event.id} ya figura como FILLED en BD. Omitiendo duplicado.`);
+          return;
+        }
       }
     }
 
-    console.log(`[Flip Event Bus] ⚡ ORDER_FILLED recibida para Nivel ${event.gridLevel}. Generando contra-orden ("Flip")...`);
+    console.log(`[Flip Event Bus] ⚡ ORDER_FILLED recibida para Nivel ${event.gridLevel} (Exchange ID: ${event.id}). Generando contra-orden ("Flip")...`);
 
     let currentUsdtBal: Decimal | number | undefined = liveUsdtFree;
     let netProfitUsd: Decimal | number | undefined;

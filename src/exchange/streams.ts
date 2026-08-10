@@ -160,6 +160,8 @@ export class CcxtExchangeStreams extends EventEmitter implements IExchangeStream
     }
   }
 
+  private emittedFilledOrderIds = new Set<string>();
+
   /**
    * Parsea y valida el payload asíncrono recibido usando Zod
    */
@@ -199,6 +201,12 @@ export class CcxtExchangeStreams extends EventEmitter implements IExchangeStream
       const validatedEvent = parseResult.data;
 
       if (validatedEvent.status === 'closed' || validatedEvent.filled.greaterThan(0)) {
+        if (validatedEvent.id && this.emittedFilledOrderIds.has(validatedEvent.id)) {
+          return validatedEvent;
+        }
+        if (validatedEvent.id) {
+          this.emittedFilledOrderIds.add(validatedEvent.id);
+        }
         this.emit('order:filled', validatedEvent);
       } else {
         this.emit('order:created', validatedEvent);
