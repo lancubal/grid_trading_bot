@@ -155,6 +155,16 @@ export class StateRepository {
     });
   }
 
+  /**
+   * Obtiene una orden buscando por su exchangeId
+   */
+  public async getOrderByExchangeId(exchangeId: string) {
+    return this.prisma.order.findUnique({
+      where: { exchangeId },
+      include: { gridLevel: true },
+    });
+  }
+
   public async disconnect(): Promise<void> {
     await this.prisma.$disconnect();
   }

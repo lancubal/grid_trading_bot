@@ -68,7 +68,7 @@ export class SlackNotifier {
     let text = '';
     if (sideUpper === 'BUY') {
       const usdtStr = data.usdtBalance !== undefined ? `$${new Decimal(data.usdtBalance).toFixed(2)}` : 'N/A';
-      text = `🟢 *COMPRA EJECUTADA*: ${amountStr} ${symbol.split('/')[0]} @ $${priceStr} USD | Saldo USDT libre: ${usdtStr}${feeText}`;
+      text = `🟢 *COMPRA EJECUTADA*: ${amountStr} ${symbol.split('/')[0]} @ $${priceStr} USD | Saldo USDT libre (líquido): ${usdtStr}${feeText}`;
     } else {
       const profitStr = data.netProfitUsd !== undefined ? `+$${new Decimal(data.netProfitUsd).toFixed(2)} USD` : '+$0.08 USD';
       text = `🔴 *VENTA (Flip) EJECUTADA*: ${amountStr} ${symbol.split('/')[0]} @ $${priceStr} USD | Profit Neto: *${profitStr}*${feeText}`;
