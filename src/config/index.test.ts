@@ -12,7 +12,8 @@ describe('Config - Zod Schema Validation Tests', () => {
       GRID_INVESTMENT: '1000.00',
       ATR_PERIOD: '14',
       ATR_TIMEFRAME: '1h',
-      MIN_GRID_RANGE_USD: '1500.00',
+      ATR_MULTIPLIER: '6.0',
+      MIN_GRID_RANGE_USD: '4000.00',
       MAX_GRID_RANGE_USD: '6000.00',
       MAX_ORDER_VALUE_USD: '150.00',
       MAX_OPEN_ORDERS: '20',
@@ -28,7 +29,8 @@ describe('Config - Zod Schema Validation Tests', () => {
     expect(parsed.GRID_INVESTMENT.toString()).toBe('1000');
     expect(parsed.ATR_PERIOD).toBe(14);
     expect(parsed.ATR_TIMEFRAME).toBe('1h');
-    expect(parsed.MIN_GRID_RANGE_USD.toString()).toBe('1500');
+    expect(parsed.ATR_MULTIPLIER).toBe(6.0);
+    expect(parsed.MIN_GRID_RANGE_USD.toString()).toBe('4000');
     expect(parsed.MAX_GRID_RANGE_USD.toString()).toBe('6000');
   });
 

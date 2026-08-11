@@ -21,10 +21,11 @@ export const EnvSchema = z.object({
     .default('2000.00'),
   ATR_PERIOD: z.coerce.number().int().min(2).max(100).default(14),
   ATR_TIMEFRAME: z.string().default('1h'),
+  ATR_MULTIPLIER: z.coerce.number().default(6.0),
   MIN_GRID_RANGE_USD: z
     .string()
     .transform((val) => new Decimal(val))
-    .default('1500.00'),
+    .default('4000.00'),
   MAX_GRID_RANGE_USD: z
     .string()
     .transform((val) => new Decimal(val))
@@ -123,6 +124,7 @@ export interface GridConfigInput {
   investment: Decimal;
   atrPeriod?: number;
   atrTimeframe?: string;
+  atrMultiplier?: number;
   minGridRangeUsd?: Decimal;
   maxGridRangeUsd?: Decimal;
 }
@@ -139,6 +141,7 @@ export function getGridConfigFromEnv(env: EnvConfig): GridConfigInput {
     investment: env.GRID_INVESTMENT,
     atrPeriod: env.ATR_PERIOD,
     atrTimeframe: env.ATR_TIMEFRAME,
+    atrMultiplier: env.ATR_MULTIPLIER,
     minGridRangeUsd: env.MIN_GRID_RANGE_USD,
     maxGridRangeUsd: env.MAX_GRID_RANGE_USD,
   };

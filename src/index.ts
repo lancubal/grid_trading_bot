@@ -51,7 +51,7 @@ async function main() {
   }
 
   console.log(`[Config] Entorno: ${env.NODE_ENV} | Modo DRY_RUN (Shadow Trading): ${env.DRY_RUN}`);
-  console.log(`[Config ATR] Período: ${env.ATR_PERIOD} | Timeframe: ${env.ATR_TIMEFRAME} | Rango: $${env.MIN_GRID_RANGE_USD} - $${env.MAX_GRID_RANGE_USD} USD`);
+  console.log(`[Config ATR] Período: ${env.ATR_PERIOD} | Timeframe: ${env.ATR_TIMEFRAME} | Multiplicador: ${env.ATR_MULTIPLIER}x | Rango: $${env.MIN_GRID_RANGE_USD} - $${env.MAX_GRID_RANGE_USD} USD`);
 
   const systemBus = new EventEmitter();
 
@@ -154,7 +154,7 @@ async function main() {
   const adjustedGrid = gridManager.adjustToVolatility(
     initialAtr,
     currentPrice,
-    4.0,
+    env.ATR_MULTIPLIER,
     env.MIN_GRID_RANGE_USD.toNumber(),
     env.MAX_GRID_RANGE_USD.toNumber()
   );
@@ -278,7 +278,7 @@ async function main() {
     const rebalanced = gridManager.adjustToVolatility(
       newAtr,
       centerPrice,
-      4.0,
+      env.ATR_MULTIPLIER,
       env.MIN_GRID_RANGE_USD.toNumber(),
       env.MAX_GRID_RANGE_USD.toNumber()
     );
