@@ -60,13 +60,14 @@ export class FomoGuard {
       this.isCurrentlyBlocked = false;
     }
 
-    // 2. Si el precio actual está por encima del nivel más alto de la grilla (Techo)
-    if (highestGridLevel.greaterThan(0) && currentPrice.greaterThan(highestGridLevel)) {
+    // 2. Si el precio actual rompe con fuerza (> 1.5%) el techo de la grilla (Pump parabólico real)
+    const pumpThreshold = highestGridLevel.times(1.015);
+    if (highestGridLevel.greaterThan(0) && currentPrice.greaterThan(pumpThreshold)) {
       this.blockedUntil = now + this.cooldownMs;
       this.isCurrentlyBlocked = true;
 
       const remainingMins = Math.round(this.cooldownMs / 60000);
-      const msg = `🚀 PUMP DETECTADO: El precio ($${currentPrice.toFixed(2)}) rompió el techo de la grilla ($${highestGridLevel.toFixed(2)}). Bloqueando recentrado por ${Math.round(this.cooldownMs / 3600000)} horas para no comprar la cima.`;
+      const msg = `🚀 PUMP DETECTADO: El precio ($${currentPrice.toFixed(2)}) rompió por más de 1.5% el techo de la grilla ($${highestGridLevel.toFixed(2)}). Bloqueando recentrado por ${Math.round(this.cooldownMs / 3600000)} horas para no comprar la cima.`;
 
       console.warn(`[FomoGuard Alert] ${msg}`);
 
