@@ -39,6 +39,11 @@ export const EnvSchema = z.object({
   // Bloqueo FOMO (Escudo Anti-Comprar la Cima de un Pump)
   FOMO_COOLDOWN_HOURS: z.coerce.number().default(4.0),
 
+  // Guardián de Deriva Proactiva de Precio (Price Drift Trigger)
+  PRICE_DRIFT_UPPER_THRESHOLD: z.coerce.number().default(0.80),
+  PRICE_DRIFT_LOWER_THRESHOLD: z.coerce.number().default(0.20),
+  PRICE_DRIFT_COOLDOWN_MINS: z.coerce.number().int().default(15),
+
   // Parámetros de Riesgo y Blindaje de Capital (Adaptativos según capital grilla)
   MAX_ORDER_VALUE_USD: z
     .string()

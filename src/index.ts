@@ -14,6 +14,7 @@ import { LocalMatchingEngine } from './core/matchingEngine';
 import { SlackNotifier } from './core/notifier';
 import { CircuitBreaker } from './core/circuitBreaker';
 import { FomoGuard } from './core/fomoGuard';
+import { PriceDriftGuard } from './core/priceDriftGuard';
 import { setupDailyReportCron } from './cron/dailyReport';
 import { OHLCV } from './backtest/backtester';
 
@@ -161,9 +162,14 @@ async function main() {
 
   console.log(`[Grid Bounds] Piso: $${adjustedGrid.newLowerPrice.toFixed(2)} | Techo: $${adjustedGrid.newUpperPrice.toFixed(2)} | Escalón: $${adjustedGrid.stepSize.toFixed(2)}`);
 
-  // 6. Inicializar Guardián de Riesgo, Motor de Volatilidad (25% umbral, 4h cooldown) y Matching Engine Local
+  // 6. Inicializar Guardián de Riesgo, Motor de Volatilidad, PriceDriftGuard y Matching Engine Local
   const riskGuard = new RiskGuard(env.MAX_ORDER_VALUE_USD, env.MAX_OPEN_ORDERS, env.MAX_GRID_ALLOCATION_USD);
   const volatilityEngine = new LiveVolatilityEngine(25, 4);
+  const priceDriftGuard = new PriceDriftGuard(
+    env.PRICE_DRIFT_UPPER_THRESHOLD,
+    env.PRICE_DRIFT_LOWER_THRESHOLD,
+    env.PRICE_DRIFT_COOLDOWN_MINS
+  );
   const matchingEngine = new LocalMatchingEngine(repository, systemBus);
 
   // Helper de Autodefensa y Rescate Autónomo desde Binance Simple Earn Flexible
@@ -638,6 +644,20 @@ async function main() {
             }
           }
         }
+      }
+
+      // MONITOREO PROACTIVO DE PRICE DRIFT (PRICE DRIFT TRIGGER)
+      const driftCheck = priceDriftGuard.checkDrift(
+        ticker.last,
+        gridManager.getConfig().lowerPrice,
+        gridManager.getConfig().upperPrice
+      );
+
+      if (driftCheck.isDrifting && !circuitBreaker.getStatus().isTripped && !fomoGuard.getStatus().isBlocked) {
+        priceDriftGuard.recordTrigger();
+        console.warn(`[Price Drift Trigger] 🧭 ${driftCheck.message} Recentrando grilla proactivamente...`);
+        const currentAtr = volatilityEngine.getCurrentAtr() || initialAtr;
+        await performGridRebalance(currentAtr, ticker.last);
       }
 
       // EVALUACIÓN DE OUT OF BOUNDS CON RECENTRADO AUTÓNOMO
