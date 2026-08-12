@@ -50,3 +50,20 @@ model BotConfig {
   value     String
   updatedAt DateTime @updatedAt
 }
+
+model LegacyOrder {
+  id                  String      @id @default(uuid())
+  exchangeId          String?     @unique
+  symbol              String
+  side                OrderSide   @default(SELL)
+  price               Decimal     @db.Decimal(18, 8)
+  amount              Decimal     @db.Decimal(18, 8)
+  fee                 Decimal?    @db.Decimal(18, 8)
+  feeCurrency         String?
+  feeCost             Decimal?    @db.Decimal(18, 8)
+  status              OrderStatus @default(OPEN)
+  costBasis           Decimal?    @db.Decimal(18, 8)
+  originalGridLevelId Int?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+}

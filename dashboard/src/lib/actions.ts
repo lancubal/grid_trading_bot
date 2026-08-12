@@ -869,3 +869,29 @@ export async function getRecentFlips(limit: number = 20) {
     return [];
   }
 }
+
+/**
+ * 7. Obtener las órdenes archivadas en la Bóveda Legacy (Inventario Retenido)
+ */
+export async function getLegacyOrders() {
+  try {
+    const legacyOrders = await prisma.legacyOrder.findMany({
+      where: { status: 'OPEN' },
+      orderBy: { price: 'asc' },
+    }).catch(() => []);
+
+    return legacyOrders.map((ord) => ({
+      id: ord.id,
+      exchangeId: ord.exchangeId || ord.id.slice(0, 8),
+      symbol: ord.symbol,
+      side: ord.side,
+      price: Number(ord.price),
+      amount: Number(ord.amount),
+      originalGridLevelId: ord.originalGridLevelId,
+      createdAt: ord.createdAt.toISOString(),
+    }));
+  } catch (err) {
+    console.error('Error fetching legacy orders:', err);
+    return [];
+  }
+}

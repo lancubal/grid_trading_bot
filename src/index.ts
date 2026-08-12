@@ -255,21 +255,39 @@ async function main() {
 
     console.log(`\n[Rebalance Trigger] ⚡ Re-ajustando grilla en torno al precio $${centerPrice.toFixed(2)} USD (ATR: $${newAtr.toFixed(2)} USD)...`);
 
-    // Obtener los costos de compra reales del inventario desde ejecuciones pasadas (FILLED)
-    const filledOrders = await repository.getOrdersByStatus(OrderStatus.FILLED);
-    const holdingCostBasis: Decimal[] = filledOrders
-      .filter((o) => o.side === OrderSide.BUY)
-      .map((o) => new Decimal(o.price));
-
     const currentOpenOrders = await repository.getOpenOrders();
     for (const ord of currentOpenOrders) {
-      if (ord.exchangeId) {
-        await exchangeAdapter.cancelOrder(ord.exchangeId, symbol);
+      const isSellAboveMarket =
+        ord.side === OrderSide.SELL &&
+        new Decimal(ord.price).greaterThan(centerPrice.times(1.005));
+
+      if (isSellAboveMarket && ord.exchangeId) {
+        console.log(
+          `[Legacy Vault Archiver] 🏛️ Archivando orden de VENTA Nivel ${ord.gridLevelId} ($${new Decimal(ord.price).toFixed(2)} USD) en Bóveda Legacy. Permanecerá ACTIVA en Binance Spot (GTC).`
+        );
+        await repository.createLegacyOrder({
+          exchangeId: ord.exchangeId,
+          symbol: ord.symbol,
+          side: OrderSide.SELL,
+          price: new Decimal(ord.price),
+          amount: new Decimal(ord.amount),
+          originalGridLevelId: ord.gridLevelId,
+          status: OrderStatus.OPEN,
+        });
+        await repository.updateOrderStatusById(ord.id, OrderStatus.CANCELED);
+      } else {
+        if (ord.exchangeId) {
+          try {
+            await exchangeAdapter.cancelOrder(ord.exchangeId, symbol);
+          } catch (err) {
+            // Ignorar error si ya estaba cancelada
+          }
+        }
         await repository.updateOrderStatusById(ord.id, OrderStatus.CANCELED);
       }
     }
 
-    // Re-consultar saldos libres reales en Binance tras cancelar órdenes
+    // Re-consultar saldos libres reales en Binance tras cancelar/archivar órdenes
     if (!env.DRY_RUN) {
       try {
         const bal = await exchangeAdapter.fetchBalance();
@@ -289,7 +307,8 @@ async function main() {
       env.MAX_GRID_RANGE_USD.toNumber()
     );
 
-    const newSeedPlans = gridManager.generateSeedOrders(centerPrice, holdingCostBasis, liveUsdtFree, liveBtcFree);
+    // Generar grilla activa fresca y simétrica en torno a centerPrice
+    const newSeedPlans = gridManager.generateSeedOrders(centerPrice, [], liveUsdtFree, liveBtcFree);
     for (const plan of newSeedPlans) {
       try {
         const createdOrder = await exchangeAdapter.createOrder({
@@ -321,7 +340,7 @@ async function main() {
       }
     }
 
-    console.log(`[Rebalance Complete] ✨ Grilla Re-ajustada: Nuevo rango $${rebalanced.newLowerPrice.toFixed(2)} - $${rebalanced.newUpperPrice.toFixed(2)} USD (${newSeedPlans.length} órdenes re-sembradas con Inventory Cost Guard).\n`);
+    console.log(`[Rebalance Complete] ✨ Grilla Re-ajustada: Nuevo rango $${rebalanced.newLowerPrice.toFixed(2)} - $${rebalanced.newUpperPrice.toFixed(2)} USD (${newSeedPlans.length} órdenes activas re-sembradas limpicamente).\n`);
   };
 
   // Si DRY_RUN === false (Ejecución real en Binance Spot), conectar WebSocket privado watchOrders()
@@ -349,6 +368,56 @@ async function main() {
         return;
       }
       handledFilledExchangeIds.add(event.id);
+
+      // 1. Verificar si la orden pertenece a la Bóveda Legacy
+      const legacyOrder = await repository.getLegacyOrderByExchangeId(event.id);
+      if (legacyOrder) {
+        if (legacyOrder.status === OrderStatus.FILLED) {
+          console.log(`[Order Deduplicator] ℹ️ Orden Legacy ${event.id} ya figura como FILLED en BD. Omitiendo duplicado.`);
+          return;
+        }
+
+        console.log(`[Legacy Vault Fill] 🔴 VENTA LEGACY EJECUTADA en Binance: ${event.amount} BTC @ $${event.price.toFixed(2)} USD!`);
+        await repository.updateLegacyOrderStatusByExchangeId(
+          event.id,
+          OrderStatus.FILLED,
+          event.fee?.cost,
+          event.fee?.currency,
+          event.fee?.cost
+        );
+
+        let currentUsdtBal: Decimal | number | undefined = liveUsdtFree;
+        try {
+          if (!env.DRY_RUN) {
+            const bal = await exchangeAdapter.fetchBalance();
+            if (bal.free['USDT'] !== undefined) {
+              currentUsdtBal = new Decimal(bal.free['USDT']);
+              liveUsdtFree = currentUsdtBal;
+            }
+          }
+        } catch {
+          // Fallback
+        }
+
+        const grossVal = new Decimal(event.amount).times(new Decimal(event.price));
+        const feeUsd = event.fee?.cost ? new Decimal(event.fee.cost) : grossVal.times(0.001);
+        const netRecovered = grossVal.minus(feeUsd);
+
+        await notifier.notifyOrderExecution({
+          side: 'SELL',
+          symbol,
+          amount: event.amount,
+          price: event.price,
+          gridLevel: legacyOrder.originalGridLevelId ?? undefined,
+          feeCurrency: event.fee?.currency,
+          feeCost: event.fee?.cost,
+          usdtBalance: currentUsdtBal,
+          netProfitUsd: netRecovered,
+        });
+
+        console.log(`[Legacy Vault Fill Complete] 💰 Recuperados $${netRecovered.toFixed(2)} USDT a la caja líquida desde la Bóveda Legacy.`);
+        return;
+      }
 
       const existingOrder = await repository.getOrderByExchangeId(event.id);
       if (existingOrder) {

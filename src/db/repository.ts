@@ -165,6 +165,73 @@ export class StateRepository {
     });
   }
 
+  /**
+   * Registra una orden archivada en la Bóveda Legacy
+   */
+  public async createLegacyOrder(data: {
+    exchangeId?: string;
+    symbol: string;
+    side?: OrderSide;
+    price: Decimal;
+    amount: Decimal;
+    costBasis?: Decimal;
+    originalGridLevelId?: number;
+    status?: OrderStatus;
+  }) {
+    return this.prisma.legacyOrder.create({
+      data: {
+        exchangeId: data.exchangeId,
+        symbol: data.symbol,
+        side: data.side ?? OrderSide.SELL,
+        price: new Decimal(data.price),
+        amount: new Decimal(data.amount),
+        costBasis: data.costBasis ? new Decimal(data.costBasis) : undefined,
+        originalGridLevelId: data.originalGridLevelId,
+        status: data.status ?? OrderStatus.OPEN,
+      },
+    });
+  }
+
+  /**
+   * Obtiene todas las órdenes archivadas en la Bóveda Legacy que permanecen abiertas en Binance
+   */
+  public async getOpenLegacyOrders() {
+    return this.prisma.legacyOrder.findMany({
+      where: { status: OrderStatus.OPEN },
+      orderBy: { price: 'asc' },
+    });
+  }
+
+  /**
+   * Actualiza el estado de una orden Legacy buscando por su exchangeId
+   */
+  public async updateLegacyOrderStatusByExchangeId(
+    exchangeId: string,
+    status: OrderStatus,
+    fee?: Decimal,
+    feeCurrency?: string,
+    feeCost?: Decimal
+  ) {
+    return this.prisma.legacyOrder.update({
+      where: { exchangeId },
+      data: {
+        status,
+        ...(fee ? { fee: new Decimal(fee) } : {}),
+        ...(feeCurrency ? { feeCurrency } : {}),
+        ...(feeCost ? { feeCost: new Decimal(feeCost) } : {}),
+      },
+    });
+  }
+
+  /**
+   * Obtiene una orden Legacy por su exchangeId
+   */
+  public async getLegacyOrderByExchangeId(exchangeId: string) {
+    return this.prisma.legacyOrder.findUnique({
+      where: { exchangeId },
+    });
+  }
+
   public async disconnect(): Promise<void> {
     await this.prisma.$disconnect();
   }
