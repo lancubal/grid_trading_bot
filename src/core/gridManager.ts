@@ -119,6 +119,7 @@ export class GridManager extends EventEmitter {
     const seedOrders: SeedOrderPlan[] = [];
     const currentPriceDec = new Decimal(currentMarketPrice);
     const investmentDec = new Decimal(this.config.investment);
+    const MIN_NOTIONAL_USD = new Decimal(5.50);
 
     const buyLevels = this.levels.filter((l) => new Decimal(l.price).lessThan(currentPriceDec));
     const sellLevels = this.levels.filter((l) => new Decimal(l.price).greaterThan(currentPriceDec));
@@ -128,10 +129,46 @@ export class GridManager extends EventEmitter {
     const totalReqBuyUsdt = defaultBuyBudgetPerLevel.times(buyLevels.length);
 
     // Ajustar presupuesto de compras al saldo libre real en USDT (con margen del 2% para comisiones)
-    const actualBuyBudgetPerLevel =
-      availableUsdt && buyLevels.length > 0 && availableUsdt.lessThan(totalReqBuyUsdt)
-        ? availableUsdt.times(0.98).dividedBy(buyLevels.length)
-        : defaultBuyBudgetPerLevel;
+    const usableUsdt = availableUsdt ? availableUsdt.times(0.98) : totalReqBuyUsdt;
+
+    if (buyLevels.length > 0) {
+      const rawBudgetPerLevel = usableUsdt.dividedBy(buyLevels.length);
+
+      if (rawBudgetPerLevel.greaterThanOrEqualTo(MIN_NOTIONAL_USD)) {
+        for (const level of buyLevels) {
+          const levelPriceDec = new Decimal(level.price);
+          const amount = rawBudgetPerLevel.dividedBy(levelPriceDec).toDecimalPlaces(6, Decimal.ROUND_DOWN);
+          if (amount.greaterThan(0.00001)) {
+            seedOrders.push({
+              levelIndex: level.levelIndex,
+              price: levelPriceDec,
+              side: 'buy',
+              amount,
+            });
+          }
+        }
+      } else if (usableUsdt.greaterThanOrEqualTo(MIN_NOTIONAL_USD)) {
+        // Saldo parcial: Concentrar el saldo libre en los niveles de compra más cercanos al precio actual
+        const maxOrders = Math.floor(usableUsdt.dividedBy(MIN_NOTIONAL_USD).toNumber());
+        const sortedBuyLevels = [...buyLevels]
+          .sort((a, b) => new Decimal(b.price).minus(new Decimal(a.price)).toNumber())
+          .slice(0, maxOrders);
+
+        const concentratedBudget = usableUsdt.dividedBy(sortedBuyLevels.length);
+        for (const level of sortedBuyLevels) {
+          const levelPriceDec = new Decimal(level.price);
+          const amount = concentratedBudget.dividedBy(levelPriceDec).toDecimalPlaces(6, Decimal.ROUND_DOWN);
+          if (amount.greaterThan(0.00001)) {
+            seedOrders.push({
+              levelIndex: level.levelIndex,
+              price: levelPriceDec,
+              side: 'buy',
+              amount,
+            });
+          }
+        }
+      }
+    }
 
     // Presupuesto base en BTC por nivel para ventas
     const defaultSellBtcPerLevel =
@@ -156,43 +193,27 @@ export class GridManager extends EventEmitter {
     const sellIndexMap = new Map<number, number>();
     sellLevels.forEach((l, idx) => sellIndexMap.set(l.levelIndex, idx));
 
-    for (const level of this.levels) {
+    for (const level of sellLevels) {
       const levelPriceDec = new Decimal(level.price);
+      let finalSellPrice = levelPriceDec;
+      const sellIdx = sellIndexMap.get(level.levelIndex) ?? 0;
+      const staggeredMinPrice = minAllowedSellPrice.plus(this.stepSize.times(sellIdx));
 
-      if (levelPriceDec.lessThan(currentPriceDec)) {
-        const amount = actualBuyBudgetPerLevel.dividedBy(levelPriceDec);
-        if (amount.greaterThan(0.00001)) {
-          seedOrders.push({
-            levelIndex: level.levelIndex,
-            price: levelPriceDec,
-            side: 'buy',
-            amount: amount.toDecimalPlaces(6, Decimal.ROUND_DOWN),
-          });
-        }
-      } else if (levelPriceDec.greaterThan(currentPriceDec)) {
-        let finalSellPrice = levelPriceDec;
-        const sellIdx = sellIndexMap.get(level.levelIndex) ?? 0;
-        const staggeredMinPrice = minAllowedSellPrice.plus(this.stepSize.times(sellIdx));
+      if (holdingCostBasis.length > 0 && finalSellPrice.lessThan(staggeredMinPrice)) {
+        finalSellPrice = staggeredMinPrice;
+      }
 
-        if (holdingCostBasis.length > 0 && finalSellPrice.lessThan(staggeredMinPrice)) {
-          console.warn(
-            `[Inventory Cost Guard] 🛡️ Orden de VENTA Nivel ${level.levelIndex} escalonada de $${finalSellPrice.toFixed(2)} a $${staggeredMinPrice.toFixed(2)} USD para evitar colapso de precios.`
-          );
-          finalSellPrice = staggeredMinPrice;
-        }
+      const amount = actualSellBtcPerLevel
+        ? actualSellBtcPerLevel
+        : defaultBuyBudgetPerLevel.dividedBy(finalSellPrice);
 
-        const amount = actualSellBtcPerLevel
-          ? actualSellBtcPerLevel
-          : defaultBuyBudgetPerLevel.dividedBy(finalSellPrice);
-
-        if (amount.greaterThan(0.00001)) {
-          seedOrders.push({
-            levelIndex: level.levelIndex,
-            price: finalSellPrice,
-            side: 'sell',
-            amount: amount.toDecimalPlaces(6, Decimal.ROUND_DOWN),
-          });
-        }
+      if (amount.greaterThan(0.00001)) {
+        seedOrders.push({
+          levelIndex: level.levelIndex,
+          price: finalSellPrice,
+          side: 'sell',
+          amount: amount.toDecimalPlaces(6, Decimal.ROUND_DOWN),
+        });
       }
     }
 
