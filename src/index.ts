@@ -701,16 +701,18 @@ async function main() {
           }
 
           const stepSize = gridManager.getStepSize();
-          if (maxBuy.greaterThan(0) && minSell.lessThan(999999)) {
-            const gapSize = minSell.minus(maxBuy);
-            if (gapSize.greaterThan(stepSize.times(4.5))) {
-              lastGapRebalanceTime = now;
-              console.warn(
-                `[Gap Recenter Guard] ⚠️ Brecha excesiva detectada entre compra ($${maxBuy.toFixed(2)}) y venta ($${minSell.toFixed(2)}) (Brecha: $${gapSize.toFixed(2)} USD). Recentrando grilla sin borrar la base de datos...`
-              );
-              const currentAtr = volatilityEngine.getCurrentAtr() || initialAtr;
-              await performGridRebalance(currentAtr, ticker.last);
-            }
+          const distanceFromMinSell = minSell.lessThan(999999) ? minSell.minus(ticker.last) : new Decimal(0);
+          const isNoManLandGap =
+            (maxBuy.greaterThan(0) && minSell.lessThan(999999) && minSell.minus(maxBuy).greaterThan(stepSize.times(4.5))) ||
+            (maxBuy.isZero() && distanceFromMinSell.greaterThan(stepSize.times(3.0)));
+
+          if (isNoManLandGap) {
+            lastGapRebalanceTime = now;
+            console.warn(
+              `[Gap Recenter Guard] ⚠️ Brecha excesiva detectada alrededor del precio $${ticker.last.toFixed(2)} USD (Venta cercana: $${minSell.toFixed(2)}). Recentrando grilla para eliminar la Zona Muerta y archivar órdenes en Legacy...`
+            );
+            const currentAtr = volatilityEngine.getCurrentAtr() || initialAtr;
+            await performGridRebalance(currentAtr, ticker.last);
           }
         }
       }
