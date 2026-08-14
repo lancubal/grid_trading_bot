@@ -90,17 +90,8 @@ async function main() {
 
       if (totalEquity.lessThan(rawGridConfig.investment.times(0.85))) {
         console.warn(
-          `[Cold Start Alert] ⚠️ Saldo total valorizado ($${totalEquity.toFixed(2)} USD) es inferior al capital asignado a la grilla ($${rawGridConfig.investment.toFixed(2)} USD).`
+          `[Cold Start Alert] ⚠️ Saldo total valorizado ($${totalEquity.toFixed(2)} USD) es inferior al capital asignado a la grilla ($${rawGridConfig.investment.toFixed(2)} USD). El bot operará con el saldo físico disponible en Spot.`
         );
-
-        if (exchangeAdapter.redeemSimpleEarnFlexible) {
-          const missingUsdt = rawGridConfig.investment.minus(totalEquity);
-          console.log(`[Cold Start Auto-Rescate] 💉 Intentando rescatar $${missingUsdt.toFixed(2)} USDT de Binance Simple Earn Flexible para completar capital de siembra...`);
-          const rescue = await exchangeAdapter.redeemSimpleEarnFlexible('USDT', missingUsdt);
-          if (rescue.success) {
-            console.log(`[Cold Start Auto-Rescate] ✅ Rescate exitoso. Saldo Spot completado para la siembra inicial.`);
-          }
-        }
       }
     } catch (err: any) {
       console.error('[Cold Start Error] Error al consultar saldo inicial en Binance:', err.message || err);
@@ -171,69 +162,6 @@ async function main() {
     env.PRICE_DRIFT_COOLDOWN_MINS
   );
   const matchingEngine = new LocalMatchingEngine(repository, systemBus);
-
-  // Helper de Autodefensa y Rescate Autónomo desde Binance Simple Earn Flexible
-  const checkAndExecuteAutoInjection = async (isInsufficientFunds: boolean = false): Promise<boolean> => {
-    try {
-      const currentInvestmentStr = (await repository.getBotConfig('GRID_INVESTMENT')) || env.GRID_INVESTMENT.toString();
-      const currentLifetimeAllocationStr = (await repository.getBotConfig('LIFETIME_ALLOCATION_USD')) || currentInvestmentStr;
-      const lastInjectionStr = await repository.getBotConfig('LAST_INJECTION_TIMESTAMP');
-
-      const currentInvestment = new Decimal(currentInvestmentStr);
-      const currentLifetimeAllocation = new Decimal(currentLifetimeAllocationStr);
-
-      const allLevels = await repository.getAllGridLevels();
-      const btcHoldingCount = allLevels.filter((g) => g.isHolding).length;
-      const estUsdtCash = Decimal.max(0, currentInvestment.minus(btcHoldingCount * 0.0011 * 64000));
-
-      const validation = riskGuard.validateAutoInjection({
-        enabled: env.ENABLE_AUTO_INJECT,
-        currentUsdtCash: estUsdtCash,
-        isInsufficientFunds,
-        starvationThresholdUsd: env.STARVATION_THRESHOLD_USD,
-        lastInjectionTimestamp: lastInjectionStr,
-        autoInjectCooldownDays: env.AUTO_INJECT_COOLDOWN_DAYS,
-        currentLifetimeAllocationUsd: currentLifetimeAllocation,
-        autoInjectAmountUsd: env.AUTO_INJECT_AMOUNT_USD,
-        maxLifetimeAllocationUsd: env.MAX_LIFETIME_ALLOCATION_USD,
-      });
-
-      if (validation.valid) {
-        console.log(`[Auto-Injector] 💉 ALERTA DE SED: Rescatando $${env.AUTO_INJECT_AMOUNT_USD.toFixed(2)} USDT de Binance Simple Earn Flexible...`);
-
-        if (exchangeAdapter.redeemSimpleEarnFlexible) {
-          const result = await exchangeAdapter.redeemSimpleEarnFlexible('USDT', env.AUTO_INJECT_AMOUNT_USD);
-
-          if (result.success) {
-            const newInvestment = currentInvestment.plus(env.AUTO_INJECT_AMOUNT_USD);
-            const newLifetimeAllocation = currentLifetimeAllocation.plus(env.AUTO_INJECT_AMOUNT_USD);
-            const nowIso = new Date().toISOString();
-
-            await repository.setBotConfig('GRID_INVESTMENT', newInvestment.toString());
-            await repository.setBotConfig('LIFETIME_ALLOCATION_USD', newLifetimeAllocation.toString());
-            await repository.setBotConfig('LAST_INJECTION_TIMESTAMP', nowIso);
-
-            console.log(
-              `[Auto-Injector] ✅ RESCATE COMPLETADO: $${env.AUTO_INJECT_AMOUNT_USD.toFixed(2)} USDT transferidos desde Simple Earn Flexible ➔ Spot. Nuevo capital grilla: $${newInvestment.toFixed(2)} USD | Total asignado acumulado: $${newLifetimeAllocation.toFixed(2)} / $${env.MAX_LIFETIME_ALLOCATION_USD.toFixed(2)} USD | Cooldown ${env.AUTO_INJECT_COOLDOWN_DAYS} días activado.\n`
-            );
-
-            // Notificación a Slack
-            await notifier.notifyAutoInjection({
-              amountUsd: env.AUTO_INJECT_AMOUNT_USD.toNumber(),
-              lifetimeAllocationUsd: newLifetimeAllocation.toNumber(),
-              maxLifetimeAllocationUsd: env.MAX_LIFETIME_ALLOCATION_USD.toNumber(),
-              cooldownDays: env.AUTO_INJECT_COOLDOWN_DAYS,
-            });
-
-            return true;
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('[Auto-Injector Error] Error evaluando inyección autónoma:', err);
-    }
-    return false;
-  };
 
   // Función reutilizable de Rebalance de Grilla
   const performGridRebalance = async (newAtr: Decimal, targetPrice?: Decimal) => {
@@ -332,8 +260,7 @@ async function main() {
         });
       } catch (err: any) {
         if (isInsufficientFundsError(err)) {
-          console.warn(`[Rebalance Insufficient Funds Alert] 🚨 Binance rechazó orden re-sembrada por saldo insuficiente (-2010). Disparando Alerta de Sed...`);
-          await checkAndExecuteAutoInjection(true);
+          console.warn(`[Rebalance Insufficient Funds Alert] 🚨 Binance rechazó orden re-sembrada por saldo insuficiente (-2010).`);
         } else {
           console.error(`[Rebalance Order Error] Error al crear orden re-sembrada:`, err.message || err);
         }
@@ -524,8 +451,7 @@ async function main() {
         console.log(`[Flip Executed] 🔄 Contra-orden ("Flip") ${flipPlan.side.toUpperCase()} colocada a $${flipPlan.price.toFixed(2)} USD (Nivel ${flipPlan.levelIndex})`);
       } catch (err: any) {
         if (isInsufficientFundsError(err)) {
-          console.warn(`[Flip Insufficient Funds Alert] 🚨 Binance rechazó orden Flip por saldo insuficiente (-2010). Disparando Alerta de Sed e Inyección de Emergencia...`);
-          await checkAndExecuteAutoInjection(true);
+          console.warn(`[Flip Insufficient Funds Alert] 🚨 Binance rechazó orden Flip por saldo insuficiente (-2010).`);
         } else {
           console.error(`[Flip Execution Error] Error al crear orden Flip:`, err.message || err);
         }
@@ -666,11 +592,6 @@ async function main() {
 
       if (env.DRY_RUN) {
         await matchingEngine.processLivePrice(ticker.last);
-      }
-
-      // Evaluar Autodefensa de Liquidez (Alerta de Sed) cada 30 ticks (~60 segundos)
-      if (tickCount % 30 === 0) {
-        await checkAndExecuteAutoInjection(false);
       }
 
       // DETECTOR INTELIGENTE DE DEPÓSITO DE CAPITAL EXTERNO (Recarga manual de USDT / BTC en Binance Spot)
