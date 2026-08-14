@@ -534,16 +534,7 @@ async function main() {
   });
 
   // 7. Registrar Tarea Programada de Cierre Diario (00:00 UTC)
-  setupDailyReportCron(repository, notifier, () => {
-    const config = gridManager.getConfig();
-    return {
-      atrValue: initialAtr.toNumber(),
-      minGridRange: config.lowerPrice.toNumber(),
-      maxGridRange: config.upperPrice.toNumber(),
-      usdtBalance: 1000.0,
-      btcBalance: 0.0022,
-    };
-  });
+  setupDailyReportCron(repository, notifier, exchangeAdapter, gridManager, volatilityEngine, symbol);
 
   // 8. Ejecutar Reconciliador / Bootstrapper al reiniciar
   const bootstrapper = new Bootstrapper(exchangeAdapter, repository, gridManager);
@@ -680,6 +671,48 @@ async function main() {
       // Evaluar Autodefensa de Liquidez (Alerta de Sed) cada 30 ticks (~60 segundos)
       if (tickCount % 30 === 0) {
         await checkAndExecuteAutoInjection(false);
+      }
+
+      // DETECTOR INTELIGENTE DE DEPÓSITO DE CAPITAL EXTERNO (Recarga manual de USDT / BTC en Binance Spot)
+      if (tickCount % 30 === 0 && !env.DRY_RUN) {
+        try {
+          const bal = await exchangeAdapter.fetchBalance();
+          const usdtFree = bal.free['USDT'] ? new Decimal(bal.free['USDT']) : new Decimal(0);
+          const usdtUsed = bal.used['USDT'] ? new Decimal(bal.used['USDT']) : new Decimal(0);
+          const btcFree = bal.free['BTC'] ? new Decimal(bal.free['BTC']) : new Decimal(0);
+          const btcUsed = bal.used['BTC'] ? new Decimal(bal.used['BTC']) : new Decimal(0);
+
+          const totalUsdt = usdtFree.plus(usdtUsed);
+          const totalBtc = btcFree.plus(btcUsed);
+          const currentTotalPhysicalEquity = totalUsdt.plus(totalBtc.times(ticker.last));
+
+          const currentConfiguredInvestment = gridManager.getConfig().investment;
+
+          // Si el saldo total físico disponible aumentó un 15% o más respecto al capital configurado
+          if (currentTotalPhysicalEquity.greaterThan(currentConfiguredInvestment.times(1.15))) {
+            console.log(
+              `\n[Capital Deposit Detector] 💰 ¡NUEVO CAPITAL DETECTADO EN BINANCE SPOT! Saldo físico total: $${currentTotalPhysicalEquity.toFixed(2)} USD > Capital Grilla anterior: $${currentConfiguredInvestment.toFixed(2)} USD.`
+            );
+            console.log(`[Capital Deposit Detector] 🔄 Escalando inversión de la grilla a $${currentTotalPhysicalEquity.toFixed(2)} USD y rebalanceando grilla activa...`);
+
+            gridManager.updateInvestment(currentTotalPhysicalEquity);
+            await repository.setBotConfig('GRID_INVESTMENT', currentTotalPhysicalEquity.toFixed(2));
+            await repository.setBotConfig('LIFETIME_ALLOCATION_USD', currentTotalPhysicalEquity.toFixed(2));
+
+            const currentAtr = volatilityEngine.getCurrentAtr() || initialAtr;
+            await performGridRebalance(currentAtr, ticker.last);
+
+            await notifier.sendSlackMessage(
+              `💰 *NUEVO CAPITAL DETECTADO Y ASIGNADO A LA GRILLA*\n` +
+              `• *Nuevo Patrimonio Total:* $${currentTotalPhysicalEquity.toFixed(2)} USD\n` +
+              `• *USDT Disponible:* $${usdtFree.toFixed(2)} USDT | *BTC Disponible:* ${btcFree.toFixed(6)} BTC\n` +
+              `• *Nuevo Tamaño por Orden:* ~$${currentTotalPhysicalEquity.dividedBy(gridManager.getConfig().gridLevels - 1).toFixed(2)} USD por nivel\n` +
+              `• *Grilla Activa:* Re-sembrada y ajustada con el nuevo capital ampliado 🚀`
+            );
+          }
+        } catch (err: any) {
+          console.warn('[Capital Deposit Detector Warning] Error verificando depósito de capital:', err.message || err);
+        }
       }
 
       // MONITOREO DE BRECHAS ("NO MAN'S LAND GAP RECENTER GUARD")

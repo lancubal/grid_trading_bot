@@ -29,6 +29,16 @@ export class GridManager extends EventEmitter {
   }
 
   /**
+   * Actualiza el capital total asignado a la grilla
+   */
+  public updateInvestment(newInvestment: Decimal | number | string): void {
+    this.config = {
+      ...this.config,
+      investment: new Decimal(newInvestment),
+    };
+  }
+
+  /**
    * Distancia entre cada nivel de precio de la grilla
    */
   private calculateStepSize(): Decimal {

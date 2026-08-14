@@ -224,6 +224,39 @@ export class StateRepository {
   }
 
   /**
+   * Obtiene las órdenes ejecutadas (FILLED) en un rango de fechas
+   */
+  public async getOrdersFilledInDateRange(startDate: Date, endDate: Date) {
+    return this.prisma.order.findMany({
+      where: {
+        status: OrderStatus.FILLED,
+        updatedAt: {
+          gte: startDate,
+          lte: endDate,
+        },
+      },
+      orderBy: { updatedAt: 'asc' },
+      include: { gridLevel: true },
+    });
+  }
+
+  /**
+   * Obtiene las órdenes Legacy ejecutadas (FILLED) en un rango de fechas
+   */
+  public async getLegacyOrdersFilledInDateRange(startDate: Date, endDate: Date) {
+    return this.prisma.legacyOrder.findMany({
+      where: {
+        status: OrderStatus.FILLED,
+        updatedAt: {
+          gte: startDate,
+          lte: endDate,
+        },
+      },
+      orderBy: { updatedAt: 'asc' },
+    });
+  }
+
+  /**
    * Obtiene una orden Legacy por su exchangeId
    */
   public async getLegacyOrderByExchangeId(exchangeId: string) {

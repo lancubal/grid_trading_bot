@@ -15,14 +15,25 @@ export interface OrderNotificationData {
 export interface DailySummaryData {
   date: string;
   flipsCompleted: number;
+  totalBuyOrders: number;
+  totalSellOrders: number;
   netProfitUsd: number;
   totalVolumeUsd: number;
   totalFeesUsd: number;
   btcBalance: number;
   usdtBalance: number;
+  totalEquityUsd: number;
   atrValue: number;
   minGridRange: number;
   maxGridRange: number;
+  stepSize: number;
+  legacyVault: {
+    openOrdersCount: number;
+    totalBtc: number;
+    totalUsdValue: number;
+    fillsCompletedYesterday: number;
+    recoveredUsdtYesterday: number;
+  };
 }
 
 export interface AutoInjectionNotificationData {
@@ -78,19 +89,35 @@ export class SlackNotifier {
   }
 
   /**
-   * Envía el Resumen Diario de Cierre a las 00:00 UTC
+   * Envía el Resumen Diario de Cierre a las 00:00 UTC con métricas reales auditadas y estado de Bóveda Legacy
    */
   public async notifyDailySummary(summary: DailySummaryData): Promise<boolean> {
     if (!this.isEnabled()) return false;
 
+    let legacyText = '';
+    if (summary.legacyVault.openOrdersCount > 0 || summary.legacyVault.fillsCompletedYesterday > 0) {
+      legacyText =
+        `\n\n🏛️ *ESTADO DE LA BÓVEDA LEGACY*\n` +
+        `• *Órdenes en Custodia:* ${summary.legacyVault.openOrdersCount} órdenes GTC activas\n` +
+        `• *Inventario Retenido:* ${summary.legacyVault.totalBtc.toFixed(6)} BTC (~$${summary.legacyVault.totalUsdValue.toFixed(2)} USD)\n` +
+        `• *Ventas Legacy Ejecutadas Ayer:* ${summary.legacyVault.fillsCompletedYesterday} orden(es) (+$${summary.legacyVault.recoveredUsdtYesterday.toFixed(2)} USDT recuperados a caja)`;
+    } else {
+      legacyText = `\n\n🏛️ *ESTADO DE LA BÓVEDA LEGACY*\n• *Bóveda Vacía:* 0 órdenes retenidas`;
+    }
+
     const text =
-      `📊 *REPORTE DE CIERRE DIARIO DE PRODUCCIÓN* (${summary.date})\n` +
-      `• *Flips Completados Hoy:* ${summary.flipsCompleted} ciclos\n` +
+      `📊 *REPORTE DE CIERRE DIARIO DE PRODUCCIÓN* (${summary.date})\n\n` +
+      `⚡ *ACTIVIDAD DE LA GRILLA ACTIVA (Últimas 24h)*\n` +
+      `• *Flips Completados:* ${summary.flipsCompleted} ciclos (${summary.totalBuyOrders} Compras / ${summary.totalSellOrders} Ventas)\n` +
       `• *Ganancia Neta Realizada:* *+$${summary.netProfitUsd.toFixed(2)} USD*\n` +
       `• *Volumen Transaccionado:* $${summary.totalVolumeUsd.toFixed(2)} USD\n` +
       `• *Comisiones Pagadas:* $${summary.totalFeesUsd.toFixed(4)} USD\n` +
-      `• *Balances Actuales:* ${summary.btcBalance.toFixed(4)} BTC | $${summary.usdtBalance.toFixed(2)} USDT\n` +
-      `• *Estado Volatilidad ATR:* $${summary.atrValue.toFixed(2)} USD (Rango: $${summary.minGridRange.toLocaleString()} - $${summary.maxGridRange.toLocaleString()})`;
+      `• *Rango de Grilla:* $${summary.minGridRange.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} – $${summary.maxGridRange.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD (ATR: $${summary.atrValue.toFixed(2)} | Escalón: $${summary.stepSize.toFixed(2)})\n\n` +
+      `💰 *SALDOS REALES EN BINANCE SPOT*\n` +
+      `• *USDT Disponible:* $${summary.usdtBalance.toFixed(2)} USDT libre\n` +
+      `• *BTC Disponible:* ${summary.btcBalance.toFixed(6)} BTC libre\n` +
+      `• *Patrimonio Total Valorizado:* ~$${summary.totalEquityUsd.toFixed(2)} USD` +
+      legacyText;
 
     return this.sendSlackMessage(text);
   }
@@ -110,7 +137,7 @@ export class SlackNotifier {
     return this.sendSlackMessage(text);
   }
 
-  private async sendSlackMessage(text: string): Promise<boolean> {
+  public async sendSlackMessage(text: string): Promise<boolean> {
     try {
       const response = await fetch(this.webhookUrl, {
         method: 'POST',
