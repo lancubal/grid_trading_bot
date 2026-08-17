@@ -330,16 +330,15 @@ async function main() {
         const feeUsd = event.fee?.cost ? new Decimal(event.fee.cost) : grossVal.times(0.001);
         const netRecovered = grossVal.minus(feeUsd);
 
-        await notifier.notifyOrderExecution({
-          side: 'SELL',
+        await notifier.notifyLegacyOrderExecution({
           symbol,
           amount: event.amount,
           price: event.price,
+          recoveredUsdt: netRecovered,
           gridLevel: legacyOrder.originalGridLevelId ?? undefined,
           feeCurrency: event.fee?.currency,
           feeCost: event.fee?.cost,
           usdtBalance: currentUsdtBal,
-          netProfitUsd: netRecovered,
         });
 
         console.log(`[Legacy Vault Fill Complete] 💰 Recuperados $${netRecovered.toFixed(2)} USDT a la caja líquida desde la Bóveda Legacy.`);
@@ -377,23 +376,10 @@ async function main() {
 
     if (event.side.toString().toUpperCase() === 'SELL') {
       const stepSize = gridManager.getStepSize();
-      const sellPrice = new Decimal(event.price);
       const amount = new Decimal(event.amount);
-
-      let buyPrice = sellPrice.minus(stepSize);
-      if (event.gridLevel !== undefined && event.gridLevel > 0) {
-        const filledBuys = await repository.getOrdersByStatus(OrderStatus.FILLED);
-        const matchBuy = filledBuys.find(
-          (o) => o.side === OrderSide.BUY && (o.gridLevelId === event.gridLevel! - 1 || o.gridLevelId === event.gridLevel)
-        );
-        if (matchBuy) {
-          buyPrice = new Decimal(matchBuy.price);
-        }
-      }
-
-      const grossProfit = sellPrice.minus(buyPrice).times(amount);
+      const grossProfit = stepSize.times(amount);
       const feeUsd = event.fee?.cost ? new Decimal(event.fee.cost) : grossProfit.times(0.001);
-      netProfitUsd = Decimal.max(0.01, grossProfit.minus(feeUsd));
+      netProfitUsd = Decimal.max(0.005, grossProfit.minus(feeUsd));
     }
 
     // Notificación en vivo a Slack

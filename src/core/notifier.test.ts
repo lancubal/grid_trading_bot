@@ -46,24 +46,25 @@ describe('SlackNotifier - Observability & Babysitting Tests', () => {
       symbol: 'BTC/USDT',
       amount: 0.0011,
       price: 65511.76,
-      netProfitUsd: 1.5,
+      netProfitUsd: 0.02,
     });
 
     expect(res).toBe(true);
   });
 
-  it('debe enviar la notificación de rescate de Binance Simple Earn', async () => {
+  it('debe enviar formateado correctamente una orden de VENTA LEGACY indicando capital recuperado a caja', async () => {
     const notifier = new SlackNotifier(true, 'https://hooks.slack.com/mock');
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
       text: async () => 'ok',
     } as Response);
 
-    const res = await notifier.notifyAutoInjection({
-      amountUsd: 1000,
-      lifetimeAllocationUsd: 2000,
-      maxLifetimeAllocationUsd: 10000,
-      cooldownDays: 20,
+    const res = await notifier.notifyLegacyOrderExecution({
+      symbol: 'BTC/USDT',
+      amount: 0.00009,
+      price: 63554.7,
+      recoveredUsdt: 5.71,
+      usdtBalance: 50.2,
     });
 
     expect(res).toBe(true);

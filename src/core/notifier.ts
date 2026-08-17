@@ -12,6 +12,17 @@ export interface OrderNotificationData {
   feeCost?: Decimal | number;
 }
 
+export interface LegacyOrderNotificationData {
+  symbol: string;
+  amount: Decimal | number;
+  price: Decimal | number;
+  recoveredUsdt: Decimal | number;
+  usdtBalance?: Decimal | number;
+  gridLevel?: number;
+  feeCurrency?: string;
+  feeCost?: Decimal | number;
+}
+
 export interface DailySummaryData {
   date: string;
   flipsCompleted: number;
@@ -57,6 +68,31 @@ export class SlackNotifier {
   }
 
   /**
+   * Envía un mensaje en vivo a Slack al ejecutarse una orden de la Bóveda Legacy
+   */
+  public async notifyLegacyOrderExecution(data: LegacyOrderNotificationData): Promise<boolean> {
+    if (!this.isEnabled()) return false;
+
+    const amountStr = new Decimal(data.amount).toFixed(6);
+    const priceStr = new Decimal(data.price).toFixed(2);
+    const symbol = data.symbol;
+    const recoveredStr = `$${new Decimal(data.recoveredUsdt).toFixed(2)} USDT`;
+    const usdtStr = data.usdtBalance !== undefined ? `$${new Decimal(data.usdtBalance).toFixed(2)}` : 'N/A';
+
+    let feeText = '';
+    if (data.feeCurrency && data.feeCost !== undefined) {
+      const feeCostStr = new Decimal(data.feeCost).toFixed(6);
+      const isBnb = data.feeCurrency.toUpperCase() === 'BNB';
+      feeText = isBnb
+        ? ` | 🪙 Fee: *${feeCostStr} BNB* (-25% desc.)`
+        : ` | Fee: ${feeCostStr} ${data.feeCurrency}`;
+    }
+
+    const text = `🏛️ *VENTA LEGACY EJECUTADA*: ${amountStr} ${symbol.split('/')[0]} @ $${priceStr} USD | Capital recuperado: *+${recoveredStr}* | Saldo USDT libre: ${usdtStr}${feeText}`;
+    return this.sendSlackMessage(text);
+  }
+
+  /**
    * Envía un mensaje en vivo a Slack al ejecutarse una orden (COMPRA o VENTA / Flip)
    */
   public async notifyOrderExecution(data: OrderNotificationData): Promise<boolean> {
@@ -81,7 +117,7 @@ export class SlackNotifier {
       const usdtStr = data.usdtBalance !== undefined ? `$${new Decimal(data.usdtBalance).toFixed(2)}` : 'N/A';
       text = `🟢 *COMPRA EJECUTADA*: ${amountStr} ${symbol.split('/')[0]} @ $${priceStr} USD | Saldo USDT libre (líquido): ${usdtStr}${feeText}`;
     } else {
-      const profitStr = data.netProfitUsd !== undefined ? `+$${new Decimal(data.netProfitUsd).toFixed(2)} USD` : '+$0.08 USD';
+      const profitStr = data.netProfitUsd !== undefined ? `+$${new Decimal(data.netProfitUsd).toFixed(2)} USD` : '+$0.02 USD';
       text = `🔴 *VENTA (Flip) EJECUTADA*: ${amountStr} ${symbol.split('/')[0]} @ $${priceStr} USD | Profit Neto: *${profitStr}*${feeText}`;
     }
 
