@@ -203,6 +203,19 @@ export class StateRepository {
   }
 
   /**
+   * Actualiza el estado de una orden Legacy buscando por su ID de BD
+   */
+  public async updateLegacyOrderStatusById(
+    id: string,
+    status: OrderStatus
+  ) {
+    return this.prisma.legacyOrder.update({
+      where: { id },
+      data: { status },
+    });
+  }
+
+  /**
    * Actualiza el estado de una orden Legacy buscando por su exchangeId
    */
   public async updateLegacyOrderStatusByExchangeId(

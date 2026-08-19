@@ -164,7 +164,7 @@ async function main() {
   const matchingEngine = new LocalMatchingEngine(repository, systemBus);
 
   // Función reutilizable de Rebalance de Grilla
-  const performGridRebalance = async (newAtr: Decimal, targetPrice?: Decimal) => {
+  const performGridRebalance = async (newAtr: Decimal, targetPrice?: Decimal, isDropRecenter: boolean = false) => {
     if (circuitBreaker.getStatus().isTripped) {
       console.warn(`[Rebalance Suspended] 🛑 Re-ajuste por volatilidad ATR pausado temporalmente por Cortacircuitos activo.`);
       return;
@@ -181,7 +181,7 @@ async function main() {
       return;
     }
 
-    console.log(`\n[Rebalance Trigger] ⚡ Re-ajustando grilla en torno al precio $${centerPrice.toFixed(2)} USD (ATR: $${newAtr.toFixed(2)} USD)...`);
+    console.log(`\n[Rebalance Trigger] ⚡ Re-ajustando grilla en torno al precio $${centerPrice.toFixed(2)} USD (ATR: $${newAtr.toFixed(2)} USD | isDropRecenter: ${isDropRecenter})...`);
 
     const currentOpenOrders = await repository.getOpenOrders();
     for (const ord of currentOpenOrders) {
@@ -189,9 +189,9 @@ async function main() {
         ord.side === OrderSide.SELL &&
         new Decimal(ord.price).greaterThan(centerPrice.times(1.005));
 
-      if (isSellAboveMarket && ord.exchangeId) {
+      if (isDropRecenter && isSellAboveMarket && ord.exchangeId) {
         console.log(
-          `[Legacy Vault Archiver] 🏛️ Archivando orden de VENTA Nivel ${ord.gridLevelId} ($${new Decimal(ord.price).toFixed(2)} USD) en Bóveda Legacy. Permanecerá ACTIVA en Binance Spot (GTC).`
+          `[Legacy Vault Archiver] 🏛️ Archivando orden de VENTA Nivel ${ord.gridLevelId} ($${new Decimal(ord.price).toFixed(2)} USD) en Bóveda Legacy por caída de rango. Permanecerá ACTIVA en Binance Spot (GTC).`
         );
         await repository.createLegacyOrder({
           exchangeId: ord.exchangeId,
@@ -450,11 +450,13 @@ async function main() {
 
   // 8. Ejecutar Reconciliador / Bootstrapper al reiniciar
   const bootstrapper = new Bootstrapper(exchangeAdapter, repository, gridManager);
+  // Reactivar inventario de la Bóveda Legacy dentro del rango de mercado operativo
+  const reactivatedCount = await bootstrapper.reactivateLegacyOrders(symbol, new Decimal(66500));
   const reconcileRes = await bootstrapper.reconcile(symbol);
 
-  if (reconcileRes.hasInvertedOrders) {
-    console.log('[Bootstrapper Inversion Auto-Fix] 🔄 Se detectaron órdenes invertidas. Forzando rebalance limpio de grilla...');
-    await performGridRebalance(initialAtr, currentPrice);
+  if (reconcileRes.hasInvertedOrders || reactivatedCount > 0) {
+    console.log('[Bootstrapper Auto-Rebalance] 🔄 Se detectaron órdenes invertidas o inventario reactivado. Forzando rebalance limpio de grilla...');
+    await performGridRebalance(initialAtr, currentPrice, false);
   }
 
   // 9. Siembra Inicial de Órdenes si es una Grilla Nueva
@@ -522,7 +524,7 @@ async function main() {
   }
 
   volatilityEngine.on('VOLATILITY_CHANGE', async (newAtr: Decimal) => {
-    await performGridRebalance(newAtr);
+    await performGridRebalance(newAtr, undefined, false);
   });
 
   await volatilityEngine.start(symbol, env.ATR_TIMEFRAME, env.ATR_PERIOD);
@@ -607,7 +609,7 @@ async function main() {
             await repository.setBotConfig('LIFETIME_ALLOCATION_USD', currentTotalPhysicalEquity.toFixed(2));
 
             const currentAtr = volatilityEngine.getCurrentAtr() || initialAtr;
-            await performGridRebalance(currentAtr, ticker.last);
+            await performGridRebalance(currentAtr, ticker.last, false);
 
             await notifier.sendSlackMessage(
               `💰 *NUEVO CAPITAL DETECTADO Y ASIGNADO A LA GRILLA*\n` +
@@ -652,7 +654,7 @@ async function main() {
               `[Gap Recenter Guard] ⚠️ Brecha excesiva detectada alrededor del precio $${ticker.last.toFixed(2)} USD (Venta cercana: $${minSell.toFixed(2)}). Recentrando grilla para eliminar la Zona Muerta y archivar órdenes en Legacy...`
             );
             const currentAtr = volatilityEngine.getCurrentAtr() || initialAtr;
-            await performGridRebalance(currentAtr, ticker.last);
+            await performGridRebalance(currentAtr, ticker.last, true);
           }
         }
       }
@@ -668,7 +670,8 @@ async function main() {
         priceDriftGuard.recordTrigger();
         console.warn(`[Price Drift Trigger] 🧭 ${driftCheck.message} Recentrando grilla proactivamente...`);
         const currentAtr = volatilityEngine.getCurrentAtr() || initialAtr;
-        await performGridRebalance(currentAtr, ticker.last);
+        const isDrop = ticker.last.lessThan(gridManager.getConfig().lowerPrice);
+        await performGridRebalance(currentAtr, ticker.last, isDrop);
       }
 
       // EVALUACIÓN DE OUT OF BOUNDS CON RECENTRADO AUTÓNOMO
@@ -681,7 +684,8 @@ async function main() {
           lastOobRebalanceTime = now;
           console.log(`[OOB Auto-Recenter] 🔄 Forzando recentrado dinámico de grilla alrededor de $${ticker.last.toFixed(2)} USD...`);
           const currentAtr = volatilityEngine.getCurrentAtr() || initialAtr;
-          await performGridRebalance(currentAtr, ticker.last);
+          const isDrop = ticker.last.lessThan(gridManager.getConfig().lowerPrice);
+          await performGridRebalance(currentAtr, ticker.last, isDrop);
         }
       }
     } catch (err) {

@@ -188,4 +188,33 @@ export class Bootstrapper {
     console.log(`[Bootstrapper] ✨ Reconciliación completada: ${result.restoredOpenOrdersCount} restauradas, ${result.offlineFillsCount} fills offline, ${result.canceledOrdersCount} canceladas, ${result.newFlipsCreatedCount} flips creados.`);
     return result;
   }
+
+  /**
+   * Reactiva órdenes de la Bóveda Legacy que se encuentren dentro del rango operativo actual,
+   * cancelándolas en Binance Spot para liberar el inventario BTC a saldo libre y permitir que
+   * la grilla activa las re-siembre simétricamente.
+   */
+  public async reactivateLegacyOrders(symbol: string, maxPriceThreshold: Decimal = new Decimal(66500)): Promise<number> {
+    console.log(`[Bootstrapper] 🏛️ Evaluando órdenes de Bóveda Legacy para reactivación (Umbral: <= $${maxPriceThreshold.toFixed(2)} USD)...`);
+    const openLegacyOrders = await this.stateRepository.getOpenLegacyOrders();
+    let reactivatedCount = 0;
+
+    for (const legacyOrd of openLegacyOrders) {
+      const ordPrice = new Decimal(legacyOrd.price);
+      if (ordPrice.lessThanOrEqualTo(maxPriceThreshold)) {
+        if (legacyOrd.exchangeId) {
+          try {
+            await this.exchangeAdapter.cancelOrder(legacyOrd.exchangeId, symbol);
+          } catch (err) {
+            // Ignorar si ya no estaba abierta en exchange
+          }
+        }
+        await this.stateRepository.updateLegacyOrderStatusById(legacyOrd.id, 'CANCELED');
+        reactivatedCount++;
+      }
+    }
+
+    console.log(`[Bootstrapper] 🚀 Reactivadas y liberadas ${reactivatedCount} órdenes de Bóveda Legacy a saldo Spot.`);
+    return reactivatedCount;
+  }
 }

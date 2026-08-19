@@ -153,4 +153,30 @@ describe('Bootstrapper - Crash Recovery & State Reconciliation Tests', () => {
       })
     );
   });
+
+  it('debe reactivar órdenes de la Bóveda Legacy cancelándolas en exchange y actualizando estado en BD', async () => {
+    (mockStateRepository as any).getOpenLegacyOrders = vi.fn().mockResolvedValue([
+      {
+        id: 'legacy-1',
+        exchangeId: 'ex-leg-1',
+        price: new Decimal('65000'),
+        amount: new Decimal('0.01'),
+        status: 'OPEN',
+      },
+      {
+        id: 'legacy-2',
+        exchangeId: 'ex-leg-2',
+        price: new Decimal('68000'), // Above threshold
+        amount: new Decimal('0.01'),
+        status: 'OPEN',
+      },
+    ]);
+    (mockStateRepository as any).updateLegacyOrderStatusById = vi.fn().mockResolvedValue({} as any);
+
+    const count = await bootstrapper.reactivateLegacyOrders('BTC/USDT', new Decimal('66500'));
+
+    expect(count).toBe(1);
+    expect(mockExchangeAdapter.cancelOrder).toHaveBeenCalledWith('ex-leg-1', 'BTC/USDT');
+    expect((mockStateRepository as any).updateLegacyOrderStatusById).toHaveBeenCalledWith('legacy-1', 'CANCELED');
+  });
 });
