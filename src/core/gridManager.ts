@@ -9,13 +9,20 @@ export interface SeedOrderPlan {
   price: Decimal;
   side: 'buy' | 'sell';
   amount: Decimal;
+  layer?: 'micro' | 'macro';
+}
+
+export interface LegacyOrder {
+  orderId?: string;
+  price: Decimal;
+  amount: Decimal;
 }
 
 export class GridManager extends EventEmitter {
   private config: GridConfigInput;
   private levels: GridLevel[] = [];
   private stepSize: Decimal;
-  private makerFeeRate: Decimal = new Decimal(0.0005); // 0.05%
+  private legacyVault: LegacyOrder[] = [];
 
   constructor(config: GridConfigInput) {
     super();
@@ -28,9 +35,6 @@ export class GridManager extends EventEmitter {
     return this.config;
   }
 
-  /**
-   * Actualiza el capital total asignado a la grilla
-   */
   public updateInvestment(newInvestment: Decimal | number | string): void {
     this.config = {
       ...this.config,
@@ -38,9 +42,33 @@ export class GridManager extends EventEmitter {
     };
   }
 
-  /**
-   * Distancia entre cada nivel de precio de la grilla
-   */
+  public getLegacyVault(): ReadonlyArray<LegacyOrder> {
+    return this.legacyVault;
+  }
+
+  public addLegacyOrder(order: LegacyOrder): void {
+    this.legacyVault.push(order);
+    console.log(
+      `[GridManager LegacyVault] 🛡️ Orden archivada en Bóveda Legacy a $${order.price.toFixed(2)} USD (${order.amount.toFixed(6)} BTC) - Cero venta a pérdida.`
+    );
+  }
+
+  public checkLegacyFills(highPrice: Decimal | number | string): LegacyOrder[] {
+    const high = new Decimal(highPrice);
+    const executed: LegacyOrder[] = [];
+    this.legacyVault = this.legacyVault.filter((order) => {
+      if (high.greaterThanOrEqualTo(order.price)) {
+        executed.push(order);
+        console.log(
+          `[GridManager LegacyVault] 🎯 ORDEN LEGACY EJECUTADA a $${order.price.toFixed(2)} USD (${order.amount.toFixed(6)} BTC). Liquidez recuperada.`
+        );
+        return false;
+      }
+      return true;
+    });
+    return executed;
+  }
+
   private calculateStepSize(): Decimal {
     const lower = new Decimal(this.config.lowerPrice);
     const upper = new Decimal(this.config.upperPrice);
@@ -49,9 +77,6 @@ export class GridManager extends EventEmitter {
     return range.dividedBy(intervals);
   }
 
-  /**
-   * Inicializa la cuadrícula de precios estática
-   */
   private initGridLevels(): void {
     this.levels = [];
     const lower = new Decimal(this.config.lowerPrice);
@@ -73,17 +98,18 @@ export class GridManager extends EventEmitter {
     return this.stepSize;
   }
 
-  /**
-   * Ajusta dinámicamente el ancho de la grilla y la separación entre niveles según el indicador ATR
-   */
   public adjustToVolatility(
     atr: Decimal,
     currentMarketPrice: Decimal,
-    multiplier: number = 4.0,
-    minRange: number = 800,
-    maxRange: number = 6000
+    multiplier: number = 2.0,
+    minRange: number = 6996,
+    maxRange: number = 8846
   ): { newLowerPrice: Decimal; newUpperPrice: Decimal; dynamicRange: Decimal; stepSize: Decimal } {
-    const dynamicRange = AtrCalculator.calculateDynamicRange(atr, multiplier, minRange, maxRange);
+    const mult = this.config.atrMultiplier || multiplier;
+    const minR = this.config.minGridRangeUsd ? this.config.minGridRangeUsd.toNumber() : minRange;
+    const maxR = this.config.maxGridRangeUsd ? this.config.maxGridRangeUsd.toNumber() : maxRange;
+
+    const dynamicRange = AtrCalculator.calculateDynamicRange(atr, mult, minR, maxR);
     const halfRange = dynamicRange.dividedBy(2);
 
     const newLowerPrice = currentMarketPrice.minus(halfRange);
@@ -113,13 +139,6 @@ export class GridManager extends EventEmitter {
     return { newLowerPrice, newUpperPrice, dynamicRange, stepSize: this.stepSize };
   }
 
-  /**
-   * Genera las órdenes de siembra iniciales con adaptación dinámica al saldo disponible en Binance (USDT y BTC)
-   * @param currentMarketPrice Precio actual de mercado
-   * @param holdingCostBasis Array opcional con los precios de compra originales del inventario retenido
-   * @param availableUsdt Saldo libre disponible en USDT (para limitar el presupuesto de compras)
-   * @param availableBtc Saldo libre disponible en BTC (para limitar el presupuesto de ventas)
-   */
   public generateSeedOrders(
     currentMarketPrice: Decimal | number | string,
     holdingCostBasis: Decimal[] = [],
@@ -131,69 +150,61 @@ export class GridManager extends EventEmitter {
     const investmentDec = new Decimal(this.config.investment);
     const MIN_NOTIONAL_USD = new Decimal(5.50);
 
+    const isDualLayer = this.config.enableDualLayer !== false;
+    const microRatio = isDualLayer ? new Decimal(this.config.microCapitalRatio || 0.25) : new Decimal(0);
+    const macroRatio = new Decimal(1).minus(microRatio);
+
+    const buyCapWeight = new Decimal(this.config.buyCapitalWeight || 0.52);
+    const sellCapWeight = new Decimal(1).minus(buyCapWeight);
+
+    // Presupuestos separados para Macro y Micro
+    const macroInvest = investmentDec.times(macroRatio);
+    const microInvest = investmentDec.times(microRatio);
+
+    let macroUsdt = availableUsdt ? availableUsdt.times(macroRatio).times(0.98) : macroInvest.times(buyCapWeight);
+    let microUsdt = availableUsdt ? availableUsdt.times(microRatio).times(0.98) : microInvest.times(buyCapWeight);
+
+    let macroBtc = availableBtc
+      ? availableBtc.times(macroRatio).times(0.98)
+      : macroInvest.times(sellCapWeight).dividedBy(currentPriceDec);
+    let microBtc = availableBtc
+      ? availableBtc.times(microRatio).times(0.98)
+      : microInvest.times(sellCapWeight).dividedBy(currentPriceDec);
+
+    // 1. CAPA MACRO
+    const macroBuyBudgetPerLevel = macroInvest.dividedBy(this.config.gridLevels - 1);
     const buyLevels = this.levels.filter((l) => new Decimal(l.price).lessThan(currentPriceDec));
     const sellLevels = this.levels.filter((l) => new Decimal(l.price).greaterThan(currentPriceDec));
 
-    // Presupuesto base por nivel si estuviera 100% líquido en USDT
-    const defaultBuyBudgetPerLevel = investmentDec.dividedBy(this.config.gridLevels - 1);
-    const totalReqBuyUsdt = defaultBuyBudgetPerLevel.times(buyLevels.length);
+    if (buyLevels.length > 0 && macroUsdt.greaterThanOrEqualTo(MIN_NOTIONAL_USD)) {
+      const sortedBuyLevels = [...buyLevels].sort((a, b) =>
+        new Decimal(b.price).minus(new Decimal(a.price)).toNumber()
+      );
 
-    // Ajustar presupuesto de compras al saldo libre real en USDT (con margen del 2% para comisiones)
-    const usableUsdt = availableUsdt ? availableUsdt.times(0.98) : totalReqBuyUsdt;
+      for (let idx = 0; idx < sortedBuyLevels.length; idx++) {
+        const level = sortedBuyLevels[idx];
+        const weightFactor = Decimal.max(0.75, new Decimal(1.35).minus(new Decimal(idx).times(0.08)));
+        const targetOrderUsd = macroBuyBudgetPerLevel.times(weightFactor);
 
-    if (buyLevels.length > 0) {
-      const rawBudgetPerLevel = usableUsdt.dividedBy(buyLevels.length);
-
-      if (rawBudgetPerLevel.greaterThanOrEqualTo(MIN_NOTIONAL_USD)) {
-        for (const level of buyLevels) {
+        if (macroUsdt.greaterThanOrEqualTo(MIN_NOTIONAL_USD)) {
+          const orderCost = Decimal.min(targetOrderUsd, macroUsdt);
           const levelPriceDec = new Decimal(level.price);
-          const amount = rawBudgetPerLevel.dividedBy(levelPriceDec).toDecimalPlaces(6, Decimal.ROUND_DOWN);
+          const amount = orderCost.dividedBy(levelPriceDec).toDecimalPlaces(6, Decimal.ROUND_DOWN);
+
           if (amount.greaterThan(0.00001)) {
+            macroUsdt = macroUsdt.minus(orderCost);
             seedOrders.push({
               levelIndex: level.levelIndex,
               price: levelPriceDec,
               side: 'buy',
               amount,
-            });
-          }
-        }
-      } else if (usableUsdt.greaterThanOrEqualTo(MIN_NOTIONAL_USD)) {
-        // Saldo parcial: Concentrar el saldo libre en los niveles de compra más cercanos al precio actual
-        const maxOrders = Math.floor(usableUsdt.dividedBy(MIN_NOTIONAL_USD).toNumber());
-        const sortedBuyLevels = [...buyLevels]
-          .sort((a, b) => new Decimal(b.price).minus(new Decimal(a.price)).toNumber())
-          .slice(0, maxOrders);
-
-        const concentratedBudget = usableUsdt.dividedBy(sortedBuyLevels.length);
-        for (const level of sortedBuyLevels) {
-          const levelPriceDec = new Decimal(level.price);
-          const amount = concentratedBudget.dividedBy(levelPriceDec).toDecimalPlaces(6, Decimal.ROUND_DOWN);
-          if (amount.greaterThan(0.00001)) {
-            seedOrders.push({
-              levelIndex: level.levelIndex,
-              price: levelPriceDec,
-              side: 'buy',
-              amount,
+              layer: 'macro',
             });
           }
         }
       }
     }
 
-    // Presupuesto base en BTC por nivel para ventas
-    const defaultSellBtcPerLevel =
-      sellLevels.length > 0
-        ? defaultBuyBudgetPerLevel.dividedBy(currentPriceDec)
-        : new Decimal(0);
-    const totalReqSellBtc = defaultSellBtcPerLevel.times(sellLevels.length);
-
-    // Ajustar presupuesto de ventas al saldo libre real en BTC (con margen del 2% para comisiones)
-    const actualSellBtcPerLevel =
-      availableBtc && sellLevels.length > 0 && availableBtc.lessThan(totalReqSellBtc)
-        ? availableBtc.times(0.98).dividedBy(sellLevels.length)
-        : null;
-
-    // Calcular el precio mínimo de venta permitido para proteger el inventario
     let minAllowedSellPrice = new Decimal(0);
     if (holdingCostBasis.length > 0) {
       const highestCost = Decimal.max(...holdingCostBasis);
@@ -213,27 +224,56 @@ export class GridManager extends EventEmitter {
         finalSellPrice = staggeredMinPrice;
       }
 
-      const amount = actualSellBtcPerLevel
-        ? actualSellBtcPerLevel
-        : defaultBuyBudgetPerLevel.dividedBy(finalSellPrice);
+      if (macroBtc.greaterThan(0.00001)) {
+        const targetBtc = macroBuyBudgetPerLevel.dividedBy(finalSellPrice);
+        const actualBtc = Decimal.min(targetBtc, macroBtc).toDecimalPlaces(6, Decimal.ROUND_DOWN);
+        if (actualBtc.greaterThan(0.00001)) {
+          macroBtc = macroBtc.minus(actualBtc);
+          seedOrders.push({
+            levelIndex: level.levelIndex,
+            price: finalSellPrice,
+            side: 'sell',
+            amount: actualBtc,
+            layer: 'macro',
+          });
+        }
+      }
+    }
 
-      if (amount.greaterThan(0.00001)) {
-        seedOrders.push({
-          levelIndex: level.levelIndex,
-          price: finalSellPrice,
-          side: 'sell',
-          amount: amount.toDecimalPlaces(6, Decimal.ROUND_DOWN),
-        });
+    // 2. CAPA MICRO (Micro-Grid para rotación continua)
+    if (isDualLayer && microRatio.greaterThan(0.05)) {
+      const microRange = this.config.microGridRangeUsd || new Decimal(2241.00);
+      const microLevels = this.config.microGridLevels || 6;
+      const microStep = microRange.dividedBy(Math.max(2, microLevels - 1));
+      const baseMicroOrderUsd = microInvest.dividedBy(Math.max(2, microLevels - 1));
+
+      const microLower = currentPriceDec.minus(microRange.dividedBy(2));
+
+      for (let j = 0; j < microLevels; j++) {
+        const mPrice = microLower.plus(microStep.times(j));
+        if (mPrice.lessThan(currentPriceDec.times(0.9995))) {
+          if (microUsdt.greaterThanOrEqualTo(MIN_NOTIONAL_USD)) {
+            const cost = Decimal.min(baseMicroOrderUsd, microUsdt);
+            const amt = cost.dividedBy(mPrice).toDecimalPlaces(6, Decimal.ROUND_DOWN);
+            if (amt.greaterThan(0.00001)) {
+              microUsdt = microUsdt.minus(cost);
+              seedOrders.push({ levelIndex: j, price: mPrice, side: 'buy', amount: amt, layer: 'micro' });
+            }
+          }
+        } else if (mPrice.greaterThan(currentPriceDec.times(1.0005))) {
+          const amt = baseMicroOrderUsd.dividedBy(mPrice).toDecimalPlaces(6, Decimal.ROUND_DOWN);
+          if (microBtc.greaterThanOrEqualTo(amt)) {
+            microBtc = microBtc.minus(amt);
+            seedOrders.push({ levelIndex: j, price: mPrice, side: 'sell', amount: amt, layer: 'micro' });
+          }
+        }
       }
     }
 
     return seedOrders;
   }
 
-  /**
-   * Procesa un Fill de orden y calcula la contra-orden ("Flip")
-   */
-  public handleOrderFill(event: OrderExecutionEvent): SeedOrderPlan | null {
+  public handleOrderFill(event: OrderExecutionEvent, layer: 'micro' | 'macro' = 'macro'): SeedOrderPlan | null {
     if (event.gridLevel === undefined || event.gridLevel < 0 || event.gridLevel >= this.levels.length) {
       console.warn(`[GridManager] Fill ignorado: Nivel de grilla no válido (${event.gridLevel})`);
       return null;
@@ -241,39 +281,30 @@ export class GridManager extends EventEmitter {
 
     const fillAmountDec = new Decimal(event.amount);
     const eventPriceDec = new Decimal(event.price);
+    const tpMult = new Decimal(layer === 'micro' ? 1.0 : (this.config.takeProfitMultiplier || 1.8));
 
     if (event.side === 'buy') {
-      const targetLevelIndex = event.gridLevel + 1;
-      if (targetLevelIndex < this.levels.length) {
-        let targetPrice = new Decimal(this.levels[targetLevelIndex].price);
-
-        const minProfitPrice = eventPriceDec.times(new Decimal(1.0015));
-        if (targetPrice.lessThan(minProfitPrice)) {
-          targetPrice = minProfitPrice;
-        }
-
-        const flipPlan: SeedOrderPlan = {
-          levelIndex: targetLevelIndex,
-          price: targetPrice,
-          side: 'sell',
-          amount: fillAmountDec,
-        };
-        this.emit('grid:flip_required', flipPlan);
-        return flipPlan;
-      }
+      const targetPrice = eventPriceDec.plus(this.stepSize.times(tpMult));
+      const flipPlan: SeedOrderPlan = {
+        levelIndex: event.gridLevel + 1,
+        price: targetPrice,
+        side: 'sell',
+        amount: fillAmountDec,
+        layer,
+      };
+      this.emit('grid:flip_required', flipPlan);
+      return flipPlan;
     } else if (event.side === 'sell') {
-      const targetLevelIndex = event.gridLevel - 1;
-      if (targetLevelIndex >= 0) {
-        const targetPrice = new Decimal(this.levels[targetLevelIndex].price);
-        const flipPlan: SeedOrderPlan = {
-          levelIndex: targetLevelIndex,
-          price: targetPrice,
-          side: 'buy',
-          amount: fillAmountDec,
-        };
-        this.emit('grid:flip_required', flipPlan);
-        return flipPlan;
-      }
+      const targetPrice = eventPriceDec.minus(this.stepSize.times(tpMult));
+      const flipPlan: SeedOrderPlan = {
+        levelIndex: event.gridLevel - 1,
+        price: targetPrice,
+        side: 'buy',
+        amount: fillAmountDec,
+        layer,
+      };
+      this.emit('grid:flip_required', flipPlan);
+      return flipPlan;
     }
 
     return null;

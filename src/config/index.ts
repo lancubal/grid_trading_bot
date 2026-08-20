@@ -14,52 +14,79 @@ export const EnvSchema = z.object({
 
   // Parámetros del Grid Adaptativo (ATR)
   GRID_SYMBOL: z.string().default('BTC/USDT'),
-  GRID_LEVELS: z.coerce.number().int().min(3).max(100).default(15),
+  GRID_LEVELS: z.coerce.number().int().min(3).max(100).default(9),
   GRID_INVESTMENT: z
     .string()
     .transform((val) => new Decimal(val))
-    .default('2000.00'),
-  ATR_PERIOD: z.coerce.number().int().min(2).max(100).default(14),
+    .default('10000.00'),
+  ATR_PERIOD: z.coerce.number().int().min(2).max(100).default(19),
   ATR_TIMEFRAME: z.string().default('1h'),
-  ATR_MULTIPLIER: z.coerce.number().default(6.0),
+  ATR_MULTIPLIER: z.coerce.number().default(2.0),
   MIN_GRID_RANGE_USD: z
     .string()
     .transform((val) => new Decimal(val))
-    .default('4000.00'),
+    .default('6996.00'),
   MAX_GRID_RANGE_USD: z
     .string()
     .transform((val) => new Decimal(val))
-    .default('6000.00'),
+    .default('8846.00'),
 
   // Cortacircuitos de Velocidad (Circuit Breaker)
-  CIRCUIT_BREAKER_DROP_PCT: z.coerce.number().default(5.0),
-  CIRCUIT_BREAKER_WINDOW_MINS: z.coerce.number().int().default(15),
+  CIRCUIT_BREAKER_DROP_PCT: z.coerce.number().default(7.4),
+  CIRCUIT_BREAKER_WINDOW_MINS: z.coerce.number().int().default(29),
   CIRCUIT_BREAKER_COOLDOWN_HOURS: z.coerce.number().default(2.0),
 
   // Bloqueo FOMO (Escudo Anti-Comprar la Cima de un Pump)
-  FOMO_COOLDOWN_HOURS: z.coerce.number().default(4.0),
+  FOMO_COOLDOWN_HOURS: z.coerce.number().default(11.5),
 
   // Guardián de Deriva Proactiva de Precio (Price Drift Trigger)
-  PRICE_DRIFT_UPPER_THRESHOLD: z.coerce.number().default(0.80),
-  PRICE_DRIFT_LOWER_THRESHOLD: z.coerce.number().default(0.20),
-  PRICE_DRIFT_COOLDOWN_MINS: z.coerce.number().int().default(15),
+  PRICE_DRIFT_UPPER_THRESHOLD: z.coerce.number().default(0.89),
+  PRICE_DRIFT_LOWER_THRESHOLD: z.coerce.number().default(0.15),
+  PRICE_DRIFT_COOLDOWN_MINS: z.coerce.number().int().default(38),
 
-  // Parámetros de Riesgo y Blindaje de Capital (Adaptativos según capital grilla)
+  // Grilla Asimétrica & Compounding Continuo
+  ENABLE_CONTINUOUS_COMPOUNDING: z
+    .string()
+    .transform((val) => val.toLowerCase() === 'true')
+    .default('true'),
+  TAKE_PROFIT_MULTIPLIER: z.coerce.number().default(1.8),
+  BUY_CAPITAL_WEIGHT: z.coerce.number().default(0.52),
+
+  // Arquitectura de Doble Capa (Micro-Grid + Macro-Grid)
+  ENABLE_DUAL_LAYER: z
+    .string()
+    .transform((val) => val.toLowerCase() === 'true')
+    .default('true'),
+  MICRO_CAPITAL_RATIO: z.coerce.number().default(0.25),
+  MICRO_GRID_RANGE_USD: z
+    .string()
+    .transform((val) => new Decimal(val))
+    .default('2241.00'),
+  MICRO_GRID_LEVELS: z.coerce.number().int().default(6),
+
+  // Orquestador de Régimen de Mercado (Control Integral PID) - Apagado por defecto
+  ENABLE_REGIME_ORCHESTRATOR: z
+    .string()
+    .transform((val) => val.toLowerCase() === 'true')
+    .default('false'),
+  REGIME_THRESHOLD_PCT: z.coerce.number().default(1.09),
+
+  // Parámetros de Riesgo y Blindaje de Capital
   MAX_ORDER_VALUE_USD: z
     .string()
     .transform((val) => new Decimal(val))
-    .default('1000.00'),
+    .default('2000.00'),
   MAX_GRID_ALLOCATION_USD: z
     .string()
     .transform((val) => new Decimal(val))
-    .default('10000.00'),
-  MAX_OPEN_ORDERS: z.coerce.number().int().default(20),
+    .default('20000.00'),
+  MAX_OPEN_ORDERS: z.coerce.number().int().default(40),
 
   // Firewall de Autodefensa de Capital y Alerta de Sed (Binance Simple Earn Flexible)
   ENABLE_AUTO_INJECT: z
     .string()
     .transform((val) => val.toLowerCase() === 'true')
-    .default('false'), // Por defecto deshabilitado el primer mes
+    .default('false'),
   STARVATION_THRESHOLD_USD: z
     .string()
     .transform((val) => new Decimal(val))
@@ -104,9 +131,9 @@ export const EnvSchema = z.object({
     .default('50.00'),
 
   // Base de Datos PostgreSQL
-  DATABASE_URL: z.string().url(),
+  DATABASE_URL: z.string().url().default('postgresql://user:pass@localhost:5432/botdb'),
 
-  // Exchange Config (Soporte dual para EXCHANGE_API_KEY / BINANCE_API_KEY)
+  // Exchange Config
   EXCHANGE_ID: z.string().default('binance'),
   EXCHANGE_API_KEY: z.string().optional().default(''),
   EXCHANGE_API_SECRET: z.string().optional().default(''),
@@ -151,6 +178,14 @@ export interface GridConfigInput {
   atrMultiplier?: number;
   minGridRangeUsd?: Decimal;
   maxGridRangeUsd?: Decimal;
+  takeProfitMultiplier?: number;
+  buyCapitalWeight?: number;
+  enableDualLayer?: boolean;
+  microCapitalRatio?: number;
+  microGridRangeUsd?: Decimal;
+  microGridLevels?: number;
+  enableRegimeOrchestrator?: boolean;
+  regimeThresholdPct?: number;
 }
 
 export function getGridConfigFromEnv(env: EnvConfig): GridConfigInput {
@@ -168,5 +203,13 @@ export function getGridConfigFromEnv(env: EnvConfig): GridConfigInput {
     atrMultiplier: env.ATR_MULTIPLIER,
     minGridRangeUsd: env.MIN_GRID_RANGE_USD,
     maxGridRangeUsd: env.MAX_GRID_RANGE_USD,
+    takeProfitMultiplier: env.TAKE_PROFIT_MULTIPLIER,
+    buyCapitalWeight: env.BUY_CAPITAL_WEIGHT,
+    enableDualLayer: env.ENABLE_DUAL_LAYER,
+    microCapitalRatio: env.MICRO_CAPITAL_RATIO,
+    microGridRangeUsd: env.MICRO_GRID_RANGE_USD,
+    microGridLevels: env.MICRO_GRID_LEVELS,
+    enableRegimeOrchestrator: env.ENABLE_REGIME_ORCHESTRATOR,
+    regimeThresholdPct: env.REGIME_THRESHOLD_PCT,
   };
 }
