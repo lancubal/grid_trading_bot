@@ -12,8 +12,9 @@ Este documento detalla exhaustivamente **cada descubrimiento y optimización val
 | **Venta a Pérdida** | Cancelaba y re-sembraba BTC al precio actual más bajo | **Bóveda Legacy:** El BTC comprado arriba queda esperando su precio alto original | `src/core/gridManager.ts` |
 | **Dimensionamiento de Órdenes** | `usdtFree / buyLevels.length` (agotaba liquidez en 5 niveles) | **Ponderación Exponencial:** $1.35x$ en el centro y reserva de efectivo para caídas | `src/core/gridManager.ts` |
 | **Compounding** | Tamaño fijo por orden durante toda la vida del bot | **Compounding Continuo Realizado:** La ganancia neta realizada expande el capital activo | `src/index.ts` & `gridManager.ts` |
-| **Grilla Asimétrica Alcista** | Paso de venta = 1.0x $\Delta$ (vende de inmediato en subidas) | **Take-Profit Asimétrico:** Multiplicador $1.8x - 2.0x$ en ventas para dejar correr el rally | `src/core/gridManager.ts` |
+| **Grilla Asimétrica Alcista** | Paso de venta = 1.0x $\Delta$ (vende de inmediato en subidas) | **Take-Profit Asimétrico:** Multiplicador $1.7x - 2.0x$ en ventas para dejar correr el rally | `src/core/gridManager.ts` |
 | **Arquitectura de Doble Capa** | Una sola grilla rígida | **Micro-Grid ($250 USD step) + Macro-Grid ($1,000 USD step)** concurrentes | `src/core/gridManager.ts` |
+| **Orquestador de Régimen** | Comportamiento estático en cualquier mercado | **Control Integral PID:** Detecta Bull/Crab/Bear en ventana 24h/96h y adapta la grilla | `src/core/gridManager.ts` |
 | **Reinyección de Liquidez** | Liquidez liberada quedaba ociosa | **Reinyección Inmediata:** Fondos liberados de ventas altas compran en la grilla activa | `src/core/gridManager.ts` |
 
 ---
@@ -51,44 +52,58 @@ export class GridManager {
 }
 ```
 
-#### B. Soporte para Grilla de Doble Capa (Micro/Macro) & Take-Profit Asimétrico
+#### B. Orquestador de Régimen en Tiempo Real (Control Integral)
 ```typescript
-// Al sembrar la grilla:
-const microRatio = Number(process.env.MICRO_CAPITAL_RATIO || 0.25);
-const microRange = Number(process.env.MICRO_GRID_RANGE_USD || 2240.00);
-const microLevels = Number(process.env.MICRO_GRID_LEVELS || 6);
+export class GridManager {
+  private emaFast24h = 0;
+  private emaSlow96h = 0;
 
-// Sembrar órdenes Macro (75% capital) y órdenes Micro (25% capital) concurrentes:
-// Cuando se ejecuta una compra Micro: se coloca venta Micro a +stepMicro
-// Cuando se ejecuta una compra Macro: se coloca venta Macro a +(stepMacro * takeProfitMultiplier)
+  public updateRegime(closePrice1h: number): 'BULL' | 'CRAB' | 'BEAR' {
+    const alphaFast = 2 / (24 + 1);
+    const alphaSlow = 2 / (96 + 1);
+    this.emaFast24h = alphaFast * closePrice1h + (1 - alphaFast) * this.emaFast24h;
+    this.emaSlow96h = alphaSlow * closePrice1h + (1 - alphaSlow) * this.emaSlow96h;
+
+    const regimeScorePct = ((this.emaFast24h - this.emaSlow96h) / this.emaSlow96h) * 100;
+    const threshold = Number(process.env.REGIME_THRESHOLD_PCT || 1.09);
+
+    if (regimeScorePct >= threshold) return 'BULL';
+    if (regimeScorePct <= -threshold) return 'BEAR';
+    return 'CRAB';
+  }
+}
 ```
 
 ---
 
-## ⚙️ Variables de Entorno `.env` Recomendadas (Doble Capa Campeona)
+## ⚙️ Variables de Entorno `.env` Recomendadas (Configuración Definitiva)
 
 ```bash
-# === MACRO GRID PARAMS ===
+# === MACRO GRID & REGIME ORCHESTRATOR ===
 GRID_LEVELS="9"
-ATR_PERIOD="19"
-ATR_MULTIPLIER="2.0"
-MIN_GRID_RANGE_USD="6996.00"
-MAX_GRID_RANGE_USD="8846.00"
-PRICE_DRIFT_UPPER_THRESHOLD="0.89"
-PRICE_DRIFT_LOWER_THRESHOLD="0.15"
-PRICE_DRIFT_COOLDOWN_MINS="38"
-CIRCUIT_BREAKER_DROP_PCT="7.4"
-CIRCUIT_BREAKER_WINDOW_MINS="29"
-FOMO_COOLDOWN_HOURS="11.5"
+ATR_PERIOD="8"
+ATR_MULTIPLIER="3.2"
+MIN_GRID_RANGE_USD="6756.00"
+MAX_GRID_RANGE_USD="12953.00"
+PRICE_DRIFT_UPPER_THRESHOLD="0.90"
+PRICE_DRIFT_LOWER_THRESHOLD="0.11"
+PRICE_DRIFT_COOLDOWN_MINS="27"
+CIRCUIT_BREAKER_DROP_PCT="6.6"
+CIRCUIT_BREAKER_WINDOW_MINS="39"
+FOMO_COOLDOWN_HOURS="6.2"
 
 # === GRILA ASIMÉTRICA & REINVERSIÓN ===
 ENABLE_CONTINUOUS_COMPOUNDING="true"
-TAKE_PROFIT_MULTIPLIER="1.8"
-BUY_CAPITAL_WEIGHT="0.52"
+TAKE_PROFIT_MULTIPLIER="1.7"
+BUY_CAPITAL_WEIGHT="0.50"
 
 # === MICRO GRID (ALTA FRECUENCIA) ===
 ENABLE_DUAL_LAYER="true"
-MICRO_CAPITAL_RATIO="0.25"
-MICRO_GRID_RANGE_USD="2241.00"
-MICRO_GRID_LEVELS="6"
+MICRO_CAPITAL_RATIO="0.22"
+MICRO_GRID_RANGE_USD="2423.00"
+MICRO_GRID_LEVELS="5"
+
+# === ORQUESTADOR DE RÉGIMEN (CONTROL INTEGRAL PID) ===
+ENABLE_REGIME_ORCHESTRATOR="true"
+REGIME_THRESHOLD_PCT="1.09"
 ```
