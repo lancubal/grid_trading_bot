@@ -3,7 +3,7 @@ import { FitnessCalculator, SimulationMetrics } from './fitness';
 
 export interface BotHyperparameters {
   gridLevels: number;
-  investment: number;
+  investment: number; // e.g. 10000
   atrPeriod: number;
   atrTimeframeMinutes: number; // default: 60 (1h)
   atrMultiplier: number;
@@ -15,6 +15,7 @@ export interface BotHyperparameters {
   circuitBreakerDropPct: number;
   circuitBreakerWindowMins: number;
   fomoCooldownHours: number;
+  enableMonthlyCompounding?: boolean; // default: true
 }
 
 interface SimulatedOrder {
@@ -25,11 +26,14 @@ interface SimulatedOrder {
 }
 
 /**
- * Motor de simulación en memoria ultra-rápido (Headless Memory Engine).
- * Evalúa cientos de miles de velas de 1m en milisegundos con cero asignaciones pesadas.
+ * Motor de simulación en memoria de Alta Fidelidad (High-Fidelity Memory Engine).
+ * - Contabilidad Spot estricta (cero inventario fantasma).
+ * - Micro-secuencia intra-vela (O ➔ L ➔ H ➔ C / O ➔ H ➔ L ➔ C).
+ * - Reinversión mensual de beneficios (Compounding).
+ * - Comisiones exactas al 0.075% BNB.
  */
 export class MemoryEngine {
-  private static readonly FEE_RATE = 0.00075; // 0.075% BNB discount fee rate
+  public static readonly FEE_RATE = 0.00075; // 0.075% BNB discount fee rate
 
   /**
    * Ejecuta la simulación determinista sobre el buffer de velas
@@ -41,11 +45,13 @@ export class MemoryEngine {
     }
 
     const durationDays = (candles.timestamps[totalCandles - 1] - candles.timestamps[0]) / (1000 * 60 * 60 * 24);
+    const enableCompounding = params.enableMonthlyCompounding !== false;
 
-    // 1. Estado Inicial del Bot
-    let usdtFree = params.investment / 2;
+    // 1. Estado Inicial del Balance Físico en Binance Spot
+    let activeInvestment = params.investment;
+    let usdtFree = activeInvestment / 2;
     const initialPrice = candles.opens[0];
-    let btcFree = (params.investment / 2) / initialPrice;
+    let btcFree = (activeInvestment / 2) / initialPrice;
     let initialEquity = usdtFree + btcFree * initialPrice;
     let peakEquity = initialEquity;
     let maxDrawdownPct = 0;
@@ -54,12 +60,14 @@ export class MemoryEngine {
     let totalVolumeUsd = 0;
     let feesPaidUsd = 0;
 
-    // Estado del Cortacircuitos y FOMO
+    // Estado del Cortacircuitos, FOMO y Compounding
     let circuitBreakerTrippedUntil = 0;
     let fomoBlockedUntil = 0;
     let lastDriftRebalanceTime = 0;
+    let lastCompoundingTimestamp = candles.timestamps[0];
+    const MONTH_MS = 30 * 24 * 60 * 60 * 1000;
 
-    // Búfer circular para cálculo de ATR (Velas de 1h agregadas)
+    // Búfer para cálculo de ATR (Velas de 1h agregadas)
     const tfMins = params.atrTimeframeMinutes;
     const tfCandlesHighs: number[] = [];
     const tfCandlesLows: number[] = [];
@@ -72,9 +80,7 @@ export class MemoryEngine {
     let currentTfVolume = candles.volumes[0];
     let tfMinuteCount = 0;
 
-    // Pre-calcular primer ATR inicial estimado
-    let currentAtr = (candles.highs[0] - candles.lows[0]) * 10;
-    if (currentAtr < 200) currentAtr = 400;
+    let currentAtr = Math.max(300, (candles.highs[0] - candles.lows[0]) * 10);
 
     // 2. Grilla y Órdenes Activas
     let currentGridLower = initialPrice - (params.minGridRangeUsd / 2);
@@ -84,9 +90,11 @@ export class MemoryEngine {
     let activeOrders: SimulatedOrder[] = [];
     const legacyOrders: SimulatedOrder[] = [];
 
-    // Función auxiliar para sembrar grilla
-    const seedGrid = (centerPrice: number, atr: number) => {
-      // Ajustar rango por ATR
+    /**
+     * Siembra o Rebalancea la Grilla con Contabilidad Spot Estricta
+     * Solo coloca órdenes de compra si hay USDT libre, y órdenes de venta si hay BTC físico real.
+     */
+    const seedGridStrict = (centerPrice: number, atr: number) => {
       const rawRange = atr * params.atrMultiplier;
       const clampedRange = Math.max(params.minGridRangeUsd, Math.min(params.maxGridRangeUsd, rawRange));
       currentGridLower = centerPrice - (clampedRange / 2);
@@ -94,25 +102,41 @@ export class MemoryEngine {
       currentStepSize = clampedRange / (params.gridLevels - 1);
 
       activeOrders = [];
-      const orderValue = params.investment / (params.gridLevels - 1);
+
+      // Identificar niveles por debajo (compras) y por encima (ventas)
+      const buyLevels: { index: number; price: number }[] = [];
+      const sellLevels: { index: number; price: number }[] = [];
 
       for (let i = 0; i < params.gridLevels; i++) {
         const levelPrice = currentGridLower + (i * currentStepSize);
-        if (levelPrice < centerPrice * 0.999) {
-          // Orden de COMPRA
-          const amount = orderValue / levelPrice;
-          activeOrders.push({ side: 'buy', price: levelPrice, amount, levelIndex: i });
-        } else if (levelPrice > centerPrice * 1.001) {
-          // Orden de VENTA
-          const amount = orderValue / levelPrice;
-          activeOrders.push({ side: 'sell', price: levelPrice, amount, levelIndex: i });
+        if (levelPrice < centerPrice * 0.9995) {
+          buyLevels.push({ index: i, price: levelPrice });
+        } else if (levelPrice > centerPrice * 1.0005) {
+          sellLevels.push({ index: i, price: levelPrice });
+        }
+      }
+
+      // 1. Distribuir USDT libre disponible entre las órdenes de COMPRA
+      if (buyLevels.length > 0 && usdtFree > 10) {
+        const usdtPerBuy = usdtFree / buyLevels.length;
+        for (const bl of buyLevels) {
+          const amount = usdtPerBuy / bl.price;
+          activeOrders.push({ side: 'buy', price: bl.price, amount, levelIndex: bl.index });
+        }
+      }
+
+      // 2. Distribuir BTC libre disponible entre las órdenes de VENTA (Strict Spot Accounting)
+      if (sellLevels.length > 0 && btcFree > 0.0001) {
+        const btcPerSell = btcFree / sellLevels.length;
+        for (const sl of sellLevels) {
+          activeOrders.push({ side: 'sell', price: sl.price, amount: btcPerSell, levelIndex: sl.index });
         }
       }
     };
 
-    seedGrid(initialPrice, currentAtr);
+    seedGridStrict(initialPrice, currentAtr);
 
-    // 3. Bucle Principal de Ticks (Velas de 1 minuto)
+    // 3. Bucle Principal de Ticks de 1 minuto
     for (let t = 0; t < totalCandles; t++) {
       const time = candles.timestamps[t];
       const open = candles.opens[t];
@@ -121,7 +145,16 @@ export class MemoryEngine {
       const close = candles.closes[t];
       const volume = candles.volumes[t];
 
-      // Actualizar agregación de vela de 1h
+      // A. Ciclo de Reinversión Mensual (Compounding)
+      if (enableCompounding && time - lastCompoundingTimestamp >= MONTH_MS) {
+        lastCompoundingTimestamp = time;
+        const currentTotalEquity = usdtFree + (btcFree * close);
+        if (currentTotalEquity > activeInvestment) {
+          activeInvestment = currentTotalEquity; // Se reinvierten todas las ganancias acumuladas
+        }
+      }
+
+      // B. Agregación de Velas de Timeframe Superior (ATR)
       if (tfMinuteCount === 0) {
         currentTfOpen = open;
         currentTfHigh = high;
@@ -134,17 +167,17 @@ export class MemoryEngine {
       currentTfVolume += volume;
       tfMinuteCount++;
 
-      // Cierre de vela de 1h -> Calcular ATR
       if (tfMinuteCount >= tfMins) {
         tfCandlesHighs.push(currentTfHigh);
         tfCandlesLows.push(currentTfLow);
         tfCandlesCloses.push(currentTfClose);
         tfMinuteCount = 0;
 
-        if (tfCandlesCloses.length >= params.atrPeriod + 1) {
+        if (tfCandlesCloses.length >= 2) {
+          const count = Math.min(params.atrPeriod, tfCandlesCloses.length - 1);
           let sumTr = 0;
           const endIdx = tfCandlesCloses.length - 1;
-          for (let k = 0; k < params.atrPeriod; k++) {
+          for (let k = 0; k < count; k++) {
             const idx = endIdx - k;
             const h = tfCandlesHighs[idx];
             const l = tfCandlesLows[idx];
@@ -152,11 +185,11 @@ export class MemoryEngine {
             const tr = Math.max(h - l, Math.abs(h - prevC), Math.abs(l - prevC));
             sumTr += tr;
           }
-          currentAtr = sumTr / params.atrPeriod;
+          currentAtr = sumTr / count;
         }
       }
 
-      // Evaluar Cortacircuitos (Drop velocity)
+      // C. Evaluar Cortacircuitos (Velocity drop)
       if (t >= params.circuitBreakerWindowMins) {
         const pastClose = candles.closes[t - params.circuitBreakerWindowMins];
         const dropPct = ((pastClose - low) / pastClose) * 100;
@@ -164,27 +197,28 @@ export class MemoryEngine {
           circuitBreakerTrippedUntil = time + (2 * 60 * 60 * 1000); // 2h cooldown
         }
       }
-
       const isCircuitBreakerActive = time < circuitBreakerTrippedUntil;
 
-      // Evaluar FomoGuard (Peak breakout)
+      // D. Evaluar FomoGuard (Peak Breakout)
       if (high > currentGridUpper * 1.015 && time > fomoBlockedUntil) {
         fomoBlockedUntil = time + (params.fomoCooldownHours * 60 * 60 * 1000);
       }
       const isFomoBlocked = time < fomoBlockedUntil;
 
-      // 4. Matching Engine Local: Evaluar Fills en la vela actual [low, high]
-      const newOrders: SimulatedOrder[] = [];
-      for (const ord of activeOrders) {
-        if (ord.side === 'buy') {
-          // Si el precio cayó hasta el precio de compra y cortacircuitos no lo frenó
-          if (low <= ord.price) {
+      // E. Micro-secuencia Intra-Vela: Evaluar Fills en orden temporal realista
+      const isGreenCandle = close >= open;
+
+      const processBuyFills = () => {
+        const remainingOrders: SimulatedOrder[] = [];
+        for (const ord of activeOrders) {
+          if (ord.side === 'buy' && low <= ord.price) {
             if (!isCircuitBreakerActive) {
-              // Fill de COMPRA
               const cost = ord.amount * ord.price;
               const fee = cost * MemoryEngine.FEE_RATE;
-              if (usdtFree >= cost) {
-                usdtFree -= cost;
+              const totalRequired = cost + fee;
+
+              if (usdtFree >= totalRequired) {
+                usdtFree -= totalRequired;
                 btcFree += ord.amount;
                 feesPaidUsd += fee;
                 totalVolumeUsd += cost;
@@ -192,29 +226,35 @@ export class MemoryEngine {
 
                 // Generar contra-orden ("Flip") de VENTA
                 const flipPrice = ord.price + currentStepSize;
-                newOrders.push({
+                remainingOrders.push({
                   side: 'sell',
                   price: flipPrice,
                   amount: ord.amount,
                   levelIndex: ord.levelIndex + 1,
                 });
               } else {
-                newOrders.push(ord); // Mantener abierta si no hay saldo
+                remainingOrders.push(ord);
               }
             } else {
-              newOrders.push(ord);
+              remainingOrders.push(ord);
             }
           } else {
-            newOrders.push(ord);
+            remainingOrders.push(ord);
           }
-        } else {
-          // Orden de VENTA: Si el precio subió hasta el precio de venta
-          if (high >= ord.price) {
-            // Fill de VENTA
-            const revenue = ord.amount * ord.price;
-            const fee = revenue * MemoryEngine.FEE_RATE;
-            if (btcFree >= ord.amount) {
-              btcFree -= ord.amount;
+        }
+        activeOrders = remainingOrders;
+      };
+
+      const processSellFills = () => {
+        const remainingOrders: SimulatedOrder[] = [];
+        for (const ord of activeOrders) {
+          if (ord.side === 'sell' && high >= ord.price) {
+            if (btcFree >= ord.amount * 0.9999) { // Tolerancia de precisión float
+              const actualBtc = Math.min(btcFree, ord.amount);
+              const revenue = actualBtc * ord.price;
+              const fee = revenue * MemoryEngine.FEE_RATE;
+
+              btcFree -= actualBtc;
               usdtFree += (revenue - fee);
               feesPaidUsd += fee;
               totalVolumeUsd += revenue;
@@ -223,30 +263,42 @@ export class MemoryEngine {
               // Generar contra-orden ("Flip") de COMPRA
               const flipPrice = ord.price - currentStepSize;
               if (!isCircuitBreakerActive) {
-                newOrders.push({
+                remainingOrders.push({
                   side: 'buy',
                   price: flipPrice,
-                  amount: ord.amount,
+                  amount: actualBtc,
                   levelIndex: ord.levelIndex - 1,
                 });
               }
             } else {
-              newOrders.push(ord);
+              remainingOrders.push(ord);
             }
           } else {
-            newOrders.push(ord);
+            remainingOrders.push(ord);
           }
         }
-      }
-      activeOrders = newOrders;
+        activeOrders = remainingOrders;
+      };
 
-      // 5. Evaluar Órdenes en la Bóveda Legacy
+      if (isGreenCandle) {
+        // Vela Verde: O ➔ L (compras) ➔ H (ventas) ➔ C
+        processBuyFills();
+        processSellFills();
+      } else {
+        // Vela Roja: O ➔ H (ventas) ➔ L (compras) ➔ C
+        processSellFills();
+        processBuyFills();
+      }
+
+      // F. Evaluar Fills en Bóveda Legacy
       for (let l = legacyOrders.length - 1; l >= 0; l--) {
         const legOrd = legacyOrders[l];
-        if (high >= legOrd.price) {
-          const rev = legOrd.amount * legOrd.price;
+        if (high >= legOrd.price && btcFree >= legOrd.amount * 0.999) {
+          const actualBtc = Math.min(btcFree, legOrd.amount);
+          const rev = actualBtc * legOrd.price;
           const fee = rev * MemoryEngine.FEE_RATE;
-          btcFree = Math.max(0, btcFree - legOrd.amount);
+
+          btcFree -= actualBtc;
           usdtFree += (rev - fee);
           feesPaidUsd += fee;
           totalVolumeUsd += rev;
@@ -255,7 +307,7 @@ export class MemoryEngine {
         }
       }
 
-      // 6. Recentrado Dinámico Out-of-Bounds & Price Drift
+      // G. Recentrado Dinámico Out-of-Bounds & Price Drift
       const gridSpan = currentGridUpper - currentGridLower;
       if (gridSpan > 0 && !isCircuitBreakerActive && !isFomoBlocked) {
         const relativePosition = (close - currentGridLower) / gridSpan;
@@ -273,12 +325,12 @@ export class MemoryEngine {
             }
           }
 
-          // Re-sembrar grilla en torno al nuevo precio
-          seedGrid(close, currentAtr);
+          // Re-sembrar grilla en torno al nuevo precio con balance físico real
+          seedGridStrict(close, currentAtr);
         }
       }
 
-      // 7. Trackear Curva de Equity & Max Drawdown
+      // H. Monitoreo de Curva de Equity & Max Drawdown
       const currentEquity = usdtFree + (btcFree * close);
       if (currentEquity > peakEquity) {
         peakEquity = currentEquity;

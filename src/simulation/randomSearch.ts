@@ -36,7 +36,7 @@ export interface CandidateEvaluation {
 }
 
 export class RandomSearchOptimizer {
-  public static sampleParams(space: ParameterSpace = DEFAULT_PARAM_SPACE, investment = 2000): BotHyperparameters {
+  public static sampleParams(space: ParameterSpace = DEFAULT_PARAM_SPACE, investment = 10000): BotHyperparameters {
     const randomInt = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
     const randomFloat = (min: number, max: number, decimals = 2) => {
       const val = Math.random() * (max - min) + min;
@@ -67,7 +67,7 @@ export class RandomSearchOptimizer {
     trainCandles: CandleBuffer,
     iterations = 500,
     space: ParameterSpace = DEFAULT_PARAM_SPACE,
-    investment = 2000,
+    investment = 10000,
     onProgress?: (completed: number, total: number, best: CandidateEvaluation | null) => void
   ): CandidateEvaluation[] {
     const results: CandidateEvaluation[] = [];

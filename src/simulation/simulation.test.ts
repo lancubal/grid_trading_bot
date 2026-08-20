@@ -5,25 +5,26 @@ import { CandleBuffer } from './datasetLoader';
 import { RandomSearchOptimizer, DEFAULT_PARAM_SPACE } from './randomSearch';
 import { GeneticOptimizer } from './geneticOptimizer';
 
-describe('Simulation & Genetic Optimizer Test Suite', () => {
+describe('High-Fidelity Simulation & Genetic Optimizer Test Suite', () => {
   const sampleParams: BotHyperparameters = {
-    gridLevels: 15,
-    investment: 2000,
-    atrPeriod: 14,
+    gridLevels: 11,
+    investment: 10000,
+    atrPeriod: 15,
     atrTimeframeMinutes: 60,
-    atrMultiplier: 6.0,
-    minGridRangeUsd: 4000,
+    atrMultiplier: 3.0,
+    minGridRangeUsd: 2000,
     maxGridRangeUsd: 6000,
-    priceDriftUpperThreshold: 0.80,
-    priceDriftLowerThreshold: 0.20,
-    priceDriftCooldownMins: 15,
-    circuitBreakerDropPct: 5.0,
-    circuitBreakerWindowMins: 15,
-    fomoCooldownHours: 4.0,
+    priceDriftUpperThreshold: 0.70,
+    priceDriftLowerThreshold: 0.30,
+    priceDriftCooldownMins: 10,
+    circuitBreakerDropPct: 4.5,
+    circuitBreakerWindowMins: 30,
+    fomoCooldownHours: 6.0,
+    enableMonthlyCompounding: true,
   };
 
   // Helper para generar velas sintéticas senoidales (mercado oscilante)
-  function createSyntheticCandles(length = 2000, basePrice = 60000, amplitude = 2000): CandleBuffer {
+  function createSyntheticCandles(length = 3000, basePrice = 60000, amplitude = 2000): CandleBuffer {
     const timestamps = new Float64Array(length);
     const opens = new Float64Array(length);
     const highs = new Float64Array(length);
@@ -50,13 +51,13 @@ describe('Simulation & Genetic Optimizer Test Suite', () => {
 
   it('debe calcular el Fitness Score correctamente penalizando el Drawdown y exceso de inventario', () => {
     const metrics = FitnessCalculator.evaluate(
-      2000,   // initialCapital
-      2400,   // finalEquity (+20% ROI)
+      10000,  // initialCapital
+      12000,  // finalEquity (+20% ROI)
       5.0,    // 5% max drawdown
-      120,    // 120 trades
-      30000,  // totalVolumeUsd
-      22.5,   // feesPaidUsd
-      0.005,  // finalBtc (baja tenencia)
+      250,    // 250 trades
+      100000, // totalVolumeUsd
+      75.0,   // feesPaidUsd (0.075% exact)
+      0.02,   // finalBtc
       65000,  // finalPrice
       30      // 30 días
     );
@@ -65,9 +66,10 @@ describe('Simulation & Genetic Optimizer Test Suite', () => {
     expect(metrics.annualizedRoiPct).toBeCloseTo((20 * 365) / 30, 1);
     expect(metrics.fitnessScore).toBeGreaterThan(0);
     expect(metrics.inventoryPenalty).toBe(0);
+    expect(metrics.feesPaidUsd).toBe(75.0);
   });
 
-  it('debe ejecutar una simulación in-memory determinista a ultra-alta velocidad', () => {
+  it('debe ejecutar una simulación determinista con contabilidad Spot estricta sin inventario fantasma', () => {
     const candles = createSyntheticCandles(3000);
     const t0 = performance.now();
     const result = MemoryEngine.run(candles, sampleParams);
@@ -77,11 +79,14 @@ describe('Simulation & Genetic Optimizer Test Suite', () => {
     expect(result.totalTrades).toBeGreaterThan(0);
     expect(result.finalEquity).toBeGreaterThan(0);
     expect(result.maxDrawdownPct).toBeGreaterThanOrEqual(0);
+    // Verificar que las comisiones sean proporcionales a la tasa 0.075%
+    expect(result.feesPaidUsd).toBeCloseTo(result.totalVolumeUsd * 0.00075, 1);
   });
 
-  it('debe generar candidatos válidos dentro de los límites en Random Search', () => {
-    const sampled = RandomSearchOptimizer.sampleParams(DEFAULT_PARAM_SPACE, 2000);
+  it('debe generar candidatos válidos dentro de los límites en Random Search con $10,000 USD de capital', () => {
+    const sampled = RandomSearchOptimizer.sampleParams(DEFAULT_PARAM_SPACE, 10000);
 
+    expect(sampled.investment).toBe(10000);
     expect(sampled.gridLevels).toBeGreaterThanOrEqual(DEFAULT_PARAM_SPACE.gridLevels[0]);
     expect(sampled.gridLevels).toBeLessThanOrEqual(DEFAULT_PARAM_SPACE.gridLevels[1]);
     expect(sampled.atrMultiplier).toBeGreaterThanOrEqual(DEFAULT_PARAM_SPACE.atrMultiplier[0]);
@@ -95,10 +100,12 @@ describe('Simulation & Genetic Optimizer Test Suite', () => {
       populationSize: 10,
       generations: 3,
       tournamentSize: 2,
+      investment: 10000,
     });
 
     expect(history.length).toBe(3);
     expect(champions.length).toBeGreaterThan(0);
+    expect(champions[0].params.investment).toBe(10000);
     expect(champions[0].metrics.fitnessScore).toBeDefined();
   });
 });

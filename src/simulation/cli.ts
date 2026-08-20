@@ -1,14 +1,21 @@
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { DatasetLoader } from './datasetLoader';
 import { RandomSearchOptimizer } from './randomSearch';
 import { GeneticOptimizer } from './geneticOptimizer';
 import { MemoryEngine } from './memoryEngine';
 
 async function main() {
+  const cpus = os.cpus();
   console.log('================================================================');
-  console.log('🧬 OPTIMIZADOR EVOLUTIVO & SIMULADOR DETERMINISTA (BTC/USDT)');
+  console.log('🧬 OPTIMIZADOR EVOLUTIVO DE ALTA FIDELIDAD (BTC/USDT SPOT)');
   console.log('================================================================');
+  console.log(`• Hardware Detectado: ${cpus[0]?.model || 'CPU'} (${cpus.length} cores)`);
+  console.log(`• Capital Inicial: $10,000.00 USD (Spot 50% USDT / 50% BTC)`);
+  console.log(`• Reinversión: Mensual (Compounding de beneficios al cierre de mes)`);
+  console.log(`• Comisiones: 0.075% BNB Spot exacta por orden ejecutada`);
+  console.log(`• Contabilidad: Spot Estricta (Cero inventario fantasma)`);
 
   const datasetPath = path.resolve(__dirname, '../../datasets/btc_historical_1m.csv');
 
@@ -19,31 +26,32 @@ async function main() {
   }
 
   const startTime = Date.now();
+  const INITIAL_INVESTMENT = 10000;
 
   // 1. Cargar y particionar dataset
   const dataset = await DatasetLoader.load(datasetPath, 0.70);
 
   // 2. FASE 1: Random Search (Exploración Monte Carlo)
   console.log('----------------------------------------------------------------');
-  console.log('🔍 FASE 1: RANDOM SEARCH (Exploración Global de Hiperparámetros)');
+  console.log('🔍 FASE 1: RANDOM SEARCH (Exploración Global del Espacio de Parámetros)');
   console.log('----------------------------------------------------------------');
-  const RANDOM_ITERATIONS = 250;
-  console.log(`• Evaluando ${RANDOM_ITERATIONS} configuraciones aleatorias sobre Train Set...`);
+  const RANDOM_ITERATIONS = 300;
+  console.log(`• Evaluando ${RANDOM_ITERATIONS} configuraciones sobre Train Set (70%)...`);
 
   const t0 = Date.now();
   const randomResults = RandomSearchOptimizer.run(
     dataset.train,
     RANDOM_ITERATIONS,
     undefined,
-    2000,
+    INITIAL_INVESTMENT,
     (completed, total, best) => {
       process.stdout.write(
-        `\r⏳ Progreso: ${completed}/${total} (${((completed / total) * 100).toFixed(0)}%) | Mejor Fitness: ${best?.metrics.fitnessScore.toFixed(2)} (ROI Anual: ${best?.metrics.annualizedRoiPct.toFixed(1)}% | MaxDD: ${best?.metrics.maxDrawdownPct.toFixed(1)}%)`
+        `\r⏳ Progreso: ${completed}/${total} (${((completed / total) * 100).toFixed(0)}%) | Mejor Fitness: ${best?.metrics.fitnessScore.toFixed(2)} (ROI: ${best?.metrics.roiPct.toFixed(1)}% | MaxDD: ${best?.metrics.maxDrawdownPct.toFixed(1)}% | Trades: ${best?.metrics.totalTrades})`
       );
     }
   );
   console.log(`\n✅ Fase 1 completada en ${((Date.now() - t0) / 1000).toFixed(2)}s.`);
-  console.log(`🏆 Mejor Candidato Fase 1: Fitness ${randomResults[0].metrics.fitnessScore.toFixed(2)} | ROI ${randomResults[0].metrics.roiPct.toFixed(2)}%\n`);
+  console.log(`🏆 Mejor Candidato Fase 1: Fitness ${randomResults[0].metrics.fitnessScore.toFixed(2)} | ROI ${randomResults[0].metrics.roiPct.toFixed(2)}% | Ganancia Neta: $${randomResults[0].metrics.netProfitUsd.toFixed(2)} USD\n`);
 
   // 3. FASE 2: Algoritmo Genético (Evolución Fina)
   console.log('----------------------------------------------------------------');
@@ -63,6 +71,7 @@ async function main() {
       populationSize: POPULATION_SIZE,
       generations: GENERATIONS,
       seedPopulation: topSeeds,
+      investment: INITIAL_INVESTMENT,
     },
     (summary) => {
       console.log(
@@ -76,7 +85,7 @@ async function main() {
   console.log('================================================================');
   console.log('🛡️ FASE 3: VALIDACIÓN CRUZADA OUT-OF-SAMPLE (Prueba Ciega en Test Set)');
   console.log('================================================================');
-  console.log(`• Evaluando los mejores 3 campeones en datos NO VISTOS (${dataset.test.length.toLocaleString()} velas)...`);
+  console.log(`• Evaluando los mejores 3 campeones en datos NO VISTOS (${dataset.test.length.toLocaleString()} velas de 1m)...`);
 
   const topChampions = geneticResults.champions.slice(0, 3);
 
@@ -89,12 +98,16 @@ async function main() {
     console.log(`----------------------------------------------------------------`);
     console.log(`📊 COMPARATIVA TRAIN (70%) vs TEST (30% Ciego):`);
     console.log(`• Fitness Score:        Train: ${trainMetrics.fitnessScore.toFixed(2).padStart(8)}  ➔  Test: ${testMetrics.fitnessScore.toFixed(2).padStart(8)}`);
+    console.log(`• Capital Inicial:      $${INITIAL_INVESTMENT.toLocaleString()} USD`);
+    console.log(`• Patrimonio Final:     Train: $${trainMetrics.finalEquity.toFixed(2).padStart(9)}  ➔  Test: $${testMetrics.finalEquity.toFixed(2).padStart(9)}`);
+    console.log(`• Ganancia Neta USD:    Train: $${trainMetrics.netProfitUsd.toFixed(2).padStart(9)}  ➔  Test: $${testMetrics.netProfitUsd.toFixed(2).padStart(9)}`);
     console.log(`• ROI Total:            Train: ${trainMetrics.roiPct.toFixed(2).padStart(7)}%  ➔  Test: ${testMetrics.roiPct.toFixed(2).padStart(7)}%`);
     console.log(`• ROI Anualizado:       Train: ${trainMetrics.annualizedRoiPct.toFixed(2).padStart(7)}%  ➔  Test: ${testMetrics.annualizedRoiPct.toFixed(2).padStart(7)}%`);
     console.log(`• Max Drawdown:         Train: ${trainMetrics.maxDrawdownPct.toFixed(2).padStart(7)}%  ➔  Test: ${testMetrics.maxDrawdownPct.toFixed(2).padStart(7)}%`);
     console.log(`• Trades Ejecutados:    Train: ${trainMetrics.totalTrades.toString().padStart(8)}  ➔  Test: ${testMetrics.totalTrades.toString().padStart(8)}`);
-    console.log(`• Comisiones Pagadas:   Train: $${trainMetrics.feesPaidUsd.toFixed(2).padStart(7)}  ➔  Test: $${testMetrics.feesPaidUsd.toFixed(2).padStart(7)}`);
-    console.log(`• Ganancia Neta USD:    Train: $${trainMetrics.netProfitUsd.toFixed(2).padStart(7)}  ➔  Test: $${testMetrics.netProfitUsd.toFixed(2).padStart(7)}`);
+    console.log(`• Volumen Operado:      Train: $${trainMetrics.totalVolumeUsd.toFixed(2).padStart(9)}  ➔  Test: $${testMetrics.totalVolumeUsd.toFixed(2).padStart(9)}`);
+    console.log(`• Comisiones BNB Pagas: Train: $${trainMetrics.feesPaidUsd.toFixed(2).padStart(8)}  ➔  Test: $${testMetrics.feesPaidUsd.toFixed(2).padStart(8)}`);
+    console.log(`• Tenencia Final BTC:   Train: ${trainMetrics.holdingBtcFinal.toFixed(4)} BTC  ➔  Test: ${testMetrics.holdingBtcFinal.toFixed(4)} BTC ($${trainMetrics.holdingBtcValueUsd.toFixed(2)})`);
 
     console.log(`\n⚙️ CONFIGURACIÓN .ENV RECOMENDADA:`);
     console.log(`GRID_LEVELS="${champion.params.gridLevels}"`);

@@ -112,7 +112,7 @@ export class GeneticOptimizer {
     const mutRate = options.mutationRate || 0.20;
     const elitism = options.elitismCount || 2;
     const space = options.space || DEFAULT_PARAM_SPACE;
-    const investment = options.investment || 2000;
+    const investment = options.investment || 10000;
 
     // 1. Inicialización de la Población (Generación 0)
     let population: BotHyperparameters[] = [];
