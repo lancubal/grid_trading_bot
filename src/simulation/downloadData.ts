@@ -8,8 +8,8 @@ import AdmZip from 'adm-zip';
 // ==========================================
 const SYMBOL = 'BTCUSDT';
 const INTERVAL = '1m';
-const START_YEAR = 2021; // Empezamos en 2021 para capturar el Bull Market
-const END_YEAR = 2023;   // Hasta fin de 2023 (Cripto invierno y lateralización)
+const START_YEAR = 2021; // Bull Market 2021 ($29k -> $69k)
+const END_YEAR = 2024;   // Incluye Bear Market 2022, Churn 2023 y Rally Halving/ETF 2024
 
 const DATASETS_DIR = path.resolve(__dirname, '../../datasets');
 const OUTPUT_FILE = path.join(DATASETS_DIR, 'btc_historical_1m.csv');
