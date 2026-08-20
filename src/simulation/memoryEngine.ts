@@ -19,6 +19,7 @@ export interface BotHyperparameters {
 }
 
 interface SimulatedOrder {
+  id: number;
   side: 'buy' | 'sell';
   price: number;
   amount: number;
@@ -26,18 +27,16 @@ interface SimulatedOrder {
 }
 
 /**
- * Motor de simulación en memoria de Alta Fidelidad (High-Fidelity Memory Engine).
- * - Contabilidad Spot estricta (cero inventario fantasma).
- * - Micro-secuencia intra-vela (O ➔ L ➔ H ➔ C / O ➔ H ➔ L ➔ C).
- * - Reinversión mensual de beneficios (Compounding).
- * - Comisiones exactas al 0.075% BNB.
+ * Motor de Simulación en Memoria con Contabilidad Física Spot Estricta (1:1 con Binance Spot).
+ * - Cero ventas a pérdida (el inventario en bóveda legacy queda bloqueado a su precio alto).
+ * - Manejo riguroso de balances Free vs. Locked (USDT y BTC).
+ * - Conservación absoluta de masa y capital.
+ * - Micro-secuencia temporal intra-vela.
+ * - Comisiones reales de 0.075% BNB.
  */
 export class MemoryEngine {
-  public static readonly FEE_RATE = 0.00075; // 0.075% BNB discount fee rate
+  public static readonly FEE_RATE = 0.00075; // 0.075% con 25% de descuento BNB
 
-  /**
-   * Ejecuta la simulación determinista sobre el buffer de velas
-   */
   public static run(candles: CandleBuffer, params: BotHyperparameters): SimulationMetrics {
     const totalCandles = candles.length;
     if (totalCandles === 0) {
@@ -47,11 +46,16 @@ export class MemoryEngine {
     const durationDays = (candles.timestamps[totalCandles - 1] - candles.timestamps[0]) / (1000 * 60 * 60 * 24);
     const enableCompounding = params.enableMonthlyCompounding !== false;
 
-    // 1. Estado Inicial del Balance Físico en Binance Spot
+    // 1. Estado de Balances Físicos en Binance Spot
     let activeInvestment = params.investment;
     let usdtFree = activeInvestment / 2;
+    let usdtLocked = 0;
+
     const initialPrice = candles.opens[0];
     let btcFree = (activeInvestment / 2) / initialPrice;
+    let btcLockedActive = 0;
+    let btcLockedLegacy = 0;
+
     let initialEquity = usdtFree + btcFree * initialPrice;
     let peakEquity = initialEquity;
     let maxDrawdownPct = 0;
@@ -59,8 +63,9 @@ export class MemoryEngine {
     let totalTrades = 0;
     let totalVolumeUsd = 0;
     let feesPaidUsd = 0;
+    let orderIdCounter = 1;
 
-    // Estado del Cortacircuitos, FOMO y Compounding
+    // Estado de Cortacircuitos, FOMO y Compounding
     let circuitBreakerTrippedUntil = 0;
     let fomoBlockedUntil = 0;
     let lastDriftRebalanceTime = 0;
@@ -91,8 +96,7 @@ export class MemoryEngine {
     const legacyOrders: SimulatedOrder[] = [];
 
     /**
-     * Siembra o Rebalancea la Grilla con Contabilidad Spot Estricta
-     * Solo coloca órdenes de compra si hay USDT libre, y órdenes de venta si hay BTC físico real.
+     * Siembra o Rebalancea la Grilla con Bloqueo Físico Estricto
      */
     const seedGridStrict = (centerPrice: number, atr: number) => {
       const rawRange = atr * params.atrMultiplier;
@@ -103,7 +107,6 @@ export class MemoryEngine {
 
       activeOrders = [];
 
-      // Identificar niveles por debajo (compras) y por encima (ventas)
       const buyLevels: { index: number; price: number }[] = [];
       const sellLevels: { index: number; price: number }[] = [];
 
@@ -116,27 +119,32 @@ export class MemoryEngine {
         }
       }
 
-      // 1. Distribuir USDT libre disponible entre las órdenes de COMPRA
+      // 1. Distribuir USDT libre disponible bloqueándolo en órdenes de COMPRA
       if (buyLevels.length > 0 && usdtFree > 10) {
         const usdtPerBuy = usdtFree / buyLevels.length;
         for (const bl of buyLevels) {
           const amount = usdtPerBuy / bl.price;
-          activeOrders.push({ side: 'buy', price: bl.price, amount, levelIndex: bl.index });
+          const cost = amount * bl.price;
+          usdtFree -= cost;
+          usdtLocked += cost;
+          activeOrders.push({ id: orderIdCounter++, side: 'buy', price: bl.price, amount, levelIndex: bl.index });
         }
       }
 
-      // 2. Distribuir BTC libre disponible entre las órdenes de VENTA (Strict Spot Accounting)
+      // 2. Distribuir BTC libre disponible bloqueándolo en órdenes de VENTA
       if (sellLevels.length > 0 && btcFree > 0.0001) {
         const btcPerSell = btcFree / sellLevels.length;
         for (const sl of sellLevels) {
-          activeOrders.push({ side: 'sell', price: sl.price, amount: btcPerSell, levelIndex: sl.index });
+          btcFree -= btcPerSell;
+          btcLockedActive += btcPerSell;
+          activeOrders.push({ id: orderIdCounter++, side: 'sell', price: sl.price, amount: btcPerSell, levelIndex: sl.index });
         }
       }
     };
 
     seedGridStrict(initialPrice, currentAtr);
 
-    // 3. Bucle Principal de Ticks de 1 minuto
+    // 3. Bucle Principal de Velas de 1 minuto
     for (let t = 0; t < totalCandles; t++) {
       const time = candles.timestamps[t];
       const open = candles.opens[t];
@@ -145,16 +153,18 @@ export class MemoryEngine {
       const close = candles.closes[t];
       const volume = candles.volumes[t];
 
-      // A. Ciclo de Reinversión Mensual (Compounding)
+      // A. Reinversión Mensual (Compounding)
       if (enableCompounding && time - lastCompoundingTimestamp >= MONTH_MS) {
         lastCompoundingTimestamp = time;
-        const currentTotalEquity = usdtFree + (btcFree * close);
+        const totalUsdtNow = usdtFree + usdtLocked;
+        const totalBtcNow = btcFree + btcLockedActive + btcLockedLegacy;
+        const currentTotalEquity = totalUsdtNow + (totalBtcNow * close);
         if (currentTotalEquity > activeInvestment) {
-          activeInvestment = currentTotalEquity; // Se reinvierten todas las ganancias acumuladas
+          activeInvestment = currentTotalEquity;
         }
       }
 
-      // B. Agregación de Velas de Timeframe Superior (ATR)
+      // B. Agregación de Velas Superiores para ATR
       if (tfMinuteCount === 0) {
         currentTfOpen = open;
         currentTfHigh = high;
@@ -199,13 +209,13 @@ export class MemoryEngine {
       }
       const isCircuitBreakerActive = time < circuitBreakerTrippedUntil;
 
-      // D. Evaluar FomoGuard (Peak Breakout)
+      // D. Evaluar FomoGuard (Peak breakout)
       if (high > currentGridUpper * 1.015 && time > fomoBlockedUntil) {
         fomoBlockedUntil = time + (params.fomoCooldownHours * 60 * 60 * 1000);
       }
       const isFomoBlocked = time < fomoBlockedUntil;
 
-      // E. Micro-secuencia Intra-Vela: Evaluar Fills en orden temporal realista
+      // E. Micro-secuencia de Fills Intra-Vela
       const isGreenCandle = close >= open;
 
       const processBuyFills = () => {
@@ -215,26 +225,23 @@ export class MemoryEngine {
             if (!isCircuitBreakerActive) {
               const cost = ord.amount * ord.price;
               const fee = cost * MemoryEngine.FEE_RATE;
-              const totalRequired = cost + fee;
 
-              if (usdtFree >= totalRequired) {
-                usdtFree -= totalRequired;
-                btcFree += ord.amount;
-                feesPaidUsd += fee;
-                totalVolumeUsd += cost;
-                totalTrades++;
+              usdtLocked -= cost;
+              usdtFree = Math.max(0, usdtFree - fee); // Comisión debitada
+              feesPaidUsd += fee;
+              totalVolumeUsd += cost;
+              totalTrades++;
 
-                // Generar contra-orden ("Flip") de VENTA
-                const flipPrice = ord.price + currentStepSize;
-                remainingOrders.push({
-                  side: 'sell',
-                  price: flipPrice,
-                  amount: ord.amount,
-                  levelIndex: ord.levelIndex + 1,
-                });
-              } else {
-                remainingOrders.push(ord);
-              }
+              // El BTC comprado se pasa inmediatamente a orden Flip SELL
+              const flipPrice = ord.price + currentStepSize;
+              btcLockedActive += ord.amount;
+              remainingOrders.push({
+                id: orderIdCounter++,
+                side: 'sell',
+                price: flipPrice,
+                amount: ord.amount,
+                levelIndex: ord.levelIndex + 1,
+              });
             } else {
               remainingOrders.push(ord);
             }
@@ -249,29 +256,29 @@ export class MemoryEngine {
         const remainingOrders: SimulatedOrder[] = [];
         for (const ord of activeOrders) {
           if (ord.side === 'sell' && high >= ord.price) {
-            if (btcFree >= ord.amount * 0.9999) { // Tolerancia de precisión float
-              const actualBtc = Math.min(btcFree, ord.amount);
-              const revenue = actualBtc * ord.price;
-              const fee = revenue * MemoryEngine.FEE_RATE;
+            const revenue = ord.amount * ord.price;
+            const fee = revenue * MemoryEngine.FEE_RATE;
 
-              btcFree -= actualBtc;
-              usdtFree += (revenue - fee);
-              feesPaidUsd += fee;
-              totalVolumeUsd += revenue;
-              totalTrades++;
+            btcLockedActive -= ord.amount;
+            usdtFree += (revenue - fee);
+            feesPaidUsd += fee;
+            totalVolumeUsd += revenue;
+            totalTrades++;
 
-              // Generar contra-orden ("Flip") de COMPRA
-              const flipPrice = ord.price - currentStepSize;
-              if (!isCircuitBreakerActive) {
-                remainingOrders.push({
-                  side: 'buy',
-                  price: flipPrice,
-                  amount: actualBtc,
-                  levelIndex: ord.levelIndex - 1,
-                });
-              }
-            } else {
-              remainingOrders.push(ord);
+            // Generar contra-orden ("Flip") de COMPRA
+            const flipPrice = ord.price - currentStepSize;
+            const buyCost = ord.amount * flipPrice;
+
+            if (!isCircuitBreakerActive && usdtFree >= buyCost) {
+              usdtFree -= buyCost;
+              usdtLocked += buyCost;
+              remainingOrders.push({
+                id: orderIdCounter++,
+                side: 'buy',
+                price: flipPrice,
+                amount: ord.amount,
+                levelIndex: ord.levelIndex - 1,
+              });
             }
           } else {
             remainingOrders.push(ord);
@@ -281,24 +288,21 @@ export class MemoryEngine {
       };
 
       if (isGreenCandle) {
-        // Vela Verde: O ➔ L (compras) ➔ H (ventas) ➔ C
         processBuyFills();
         processSellFills();
       } else {
-        // Vela Roja: O ➔ H (ventas) ➔ L (compras) ➔ C
         processSellFills();
         processBuyFills();
       }
 
-      // F. Evaluar Fills en Bóveda Legacy
+      // F. Evaluar Fills en Bóveda Legacy (Cero venta a pérdida: solo ejecuta a su precio original alto)
       for (let l = legacyOrders.length - 1; l >= 0; l--) {
         const legOrd = legacyOrders[l];
-        if (high >= legOrd.price && btcFree >= legOrd.amount * 0.999) {
-          const actualBtc = Math.min(btcFree, legOrd.amount);
-          const rev = actualBtc * legOrd.price;
+        if (high >= legOrd.price) {
+          const rev = legOrd.amount * legOrd.price;
           const fee = rev * MemoryEngine.FEE_RATE;
 
-          btcFree -= actualBtc;
+          btcLockedLegacy -= legOrd.amount;
           usdtFree += (rev - fee);
           feesPaidUsd += fee;
           totalVolumeUsd += rev;
@@ -318,20 +322,41 @@ export class MemoryEngine {
         if ((isOutOfRange || isDrifting) && time - lastDriftRebalanceTime >= cooldownMs) {
           lastDriftRebalanceTime = time;
 
-          // Archivar en bóveda legacy ventas que quedaron por encima
+          // 1. Cancelar todas las compras abiertas liberando USDT locked ➔ free
           for (const ord of activeOrders) {
-            if (ord.side === 'sell' && ord.price > close * 1.005) {
-              legacyOrders.push(ord);
+            if (ord.side === 'buy') {
+              const cost = ord.amount * ord.price;
+              usdtLocked -= cost;
+              usdtFree += cost;
             }
           }
 
-          // Re-sembrar grilla en torno al nuevo precio con balance físico real
+          // 2. Gestionar ventas abiertas:
+          // Las que están por encima del mercado se archivan en Legacy (BTC queda bloqueado GTC en precio alto)
+          // Las que están cerca o por debajo se cancelan liberando BTC locked ➔ free
+          for (const ord of activeOrders) {
+            if (ord.side === 'sell') {
+              if (ord.price > close * 1.005) {
+                btcLockedActive -= ord.amount;
+                btcLockedLegacy += ord.amount;
+                legacyOrders.push(ord);
+              } else {
+                btcLockedActive -= ord.amount;
+                btcFree += ord.amount;
+              }
+            }
+          }
+
+          // 3. Re-sembrar la nueva grilla utilizando ÚNICAMENTE los saldos libres (usdtFree y btcFree)
           seedGridStrict(close, currentAtr);
         }
       }
 
-      // H. Monitoreo de Curva de Equity & Max Drawdown
-      const currentEquity = usdtFree + (btcFree * close);
+      // H. Cálculo Exacto de Patrimonio Total (Equity) & Drawdown
+      const totalUsdt = usdtFree + usdtLocked;
+      const totalBtc = btcFree + btcLockedActive + btcLockedLegacy;
+      const currentEquity = totalUsdt + (totalBtc * close);
+
       if (currentEquity > peakEquity) {
         peakEquity = currentEquity;
       }
@@ -342,7 +367,9 @@ export class MemoryEngine {
     }
 
     const finalPrice = candles.closes[totalCandles - 1];
-    const finalEquity = usdtFree + (btcFree * finalPrice);
+    const totalFinalUsdt = usdtFree + usdtLocked;
+    const totalFinalBtc = btcFree + btcLockedActive + btcLockedLegacy;
+    const finalEquity = totalFinalUsdt + (totalFinalBtc * finalPrice);
 
     return FitnessCalculator.evaluate(
       initialEquity,
@@ -351,7 +378,7 @@ export class MemoryEngine {
       totalTrades,
       totalVolumeUsd,
       feesPaidUsd,
-      btcFree,
+      totalFinalBtc,
       finalPrice,
       durationDays
     );
