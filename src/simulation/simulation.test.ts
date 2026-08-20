@@ -20,7 +20,7 @@ describe('Balanced Liquidity & High-Fidelity Simulation Test Suite', () => {
     circuitBreakerDropPct: 4.5,
     circuitBreakerWindowMins: 30,
     fomoCooldownHours: 6.0,
-    enableMonthlyCompounding: true,
+    enableContinuousCompounding: true,
   };
 
   // Helper para generar velas sintéticas senoidales (mercado oscilante)

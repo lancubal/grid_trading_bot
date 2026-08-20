@@ -17,17 +17,17 @@ export interface ParameterSpace {
 }
 
 export const DEFAULT_PARAM_SPACE: ParameterSpace = {
-  gridLevels: [8, 25],
+  gridLevels: [12, 30],
   atrPeriod: [7, 28],
-  atrMultiplier: [2.0, 8.0],
-  minGridRangeUsd: [1500, 6000],
-  maxGridRangeUsd: [4000, 15000],
+  atrMultiplier: [1.5, 4.5],
+  minGridRangeUsd: [1200, 4000],
+  maxGridRangeUsd: [3500, 9000],
   priceDriftUpperThreshold: [0.65, 0.90],
   priceDriftLowerThreshold: [0.10, 0.35],
-  priceDriftCooldownMins: [10, 60],
-  circuitBreakerDropPct: [2.5, 7.0],
-  circuitBreakerWindowMins: [10, 45],
-  fomoCooldownHours: [1.0, 12.0],
+  priceDriftCooldownMins: [10, 50],
+  circuitBreakerDropPct: [3.0, 7.0],
+  circuitBreakerWindowMins: [10, 40],
+  fomoCooldownHours: [2.0, 10.0],
 };
 
 export interface CandidateEvaluation {
@@ -60,7 +60,7 @@ export class RandomSearchOptimizer {
       circuitBreakerDropPct: randomFloat(space.circuitBreakerDropPct[0], space.circuitBreakerDropPct[1], 1),
       circuitBreakerWindowMins: randomInt(space.circuitBreakerWindowMins[0], space.circuitBreakerWindowMins[1]),
       fomoCooldownHours: randomFloat(space.fomoCooldownHours[0], space.fomoCooldownHours[1], 1),
-      enableMonthlyCompounding: true,
+      enableContinuousCompounding: true,
     };
   }
 

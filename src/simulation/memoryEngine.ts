@@ -15,7 +15,7 @@ export interface BotHyperparameters {
   circuitBreakerDropPct: number;
   circuitBreakerWindowMins: number;
   fomoCooldownHours: number;
-  enableMonthlyCompounding?: boolean; // default: true
+  enableContinuousCompounding?: boolean; // default: true
 }
 
 interface SimulatedOrder {
@@ -27,11 +27,11 @@ interface SimulatedOrder {
 }
 
 /**
- * Motor de Simulación en Memoria con Gestión Inteligente de Liquidez y Spot 1:1.
- * - Dimensionamiento equilibrado por orden (evita quemar el 100% de liquidez en caídas menores).
- * - Conservación de reserva libre de USDT para comprar en pisos y recentrados.
- * - Cero ventas a pérdida (Bóveda Legacy protegida).
- * - Reinversión mensual de beneficios (Compounding).
+ * Motor de Simulación en Memoria de Alta Rentabilidad y Precisión Spot 1:1.
+ * - Compounding Continuo en Tiempo Real (Re-inversión tick-by-tick por flip).
+ * - Dimensionamiento Ponderado por Proximidad (Mayor capital en la zona central de oscilación rápida).
+ * - Conservación de liquidez y reserva de USDT.
+ * - Cero ventas a pérdida (Bóveda Legacy blindada).
  * - Comisiones exactas al 0.075% BNB.
  */
 export class MemoryEngine {
@@ -44,7 +44,7 @@ export class MemoryEngine {
     }
 
     const durationDays = (candles.timestamps[totalCandles - 1] - candles.timestamps[0]) / (1000 * 60 * 60 * 24);
-    const enableCompounding = params.enableMonthlyCompounding !== false;
+    const enableCompounding = params.enableContinuousCompounding !== false;
 
     // 1. Estado de Balances Físicos en Binance Spot
     let activeInvestment = params.investment;
@@ -68,12 +68,10 @@ export class MemoryEngine {
     // Rastrear días activos con fills
     const activeDaysSet = new Set<number>();
 
-    // Estado del Cortacircuitos, FOMO y Compounding
+    // Estado del Cortacircuitos y FOMO
     let circuitBreakerTrippedUntil = 0;
     let fomoBlockedUntil = 0;
     let lastDriftRebalanceTime = 0;
-    let lastCompoundingTimestamp = candles.timestamps[0];
-    const MONTH_MS = 30 * 24 * 60 * 60 * 1000;
 
     // Búfer para cálculo de ATR (Velas de 1h agregadas)
     const tfMins = params.atrTimeframeMinutes;
@@ -99,8 +97,7 @@ export class MemoryEngine {
     const legacyOrders: SimulatedOrder[] = [];
 
     /**
-     * Siembra o Rebalancea la Grilla con Dimensionamiento Equilibrado
-     * Coloca órdenes de tamaño TargetOrderValue preservando USDT de reserva.
+     * Siembra o Rebalancea la Grilla con Dimensionamiento Ponderado por Proximidad (Proximity-Weighted Sizing)
      */
     const seedGridStrict = (centerPrice: number, atr: number) => {
       const rawRange = atr * params.atrMultiplier;
@@ -111,23 +108,31 @@ export class MemoryEngine {
 
       activeOrders = [];
 
-      const buyLevels: { index: number; price: number }[] = [];
-      const sellLevels: { index: number; price: number }[] = [];
+      const buyLevels: { index: number; price: number; distance: number }[] = [];
+      const sellLevels: { index: number; price: number; distance: number }[] = [];
 
       for (let i = 0; i < params.gridLevels; i++) {
         const levelPrice = currentGridLower + (i * currentStepSize);
         if (levelPrice < centerPrice * 0.9995) {
-          buyLevels.push({ index: i, price: levelPrice });
+          buyLevels.push({ index: i, price: levelPrice, distance: Math.abs(centerPrice - levelPrice) });
         } else if (levelPrice > centerPrice * 1.0005) {
-          sellLevels.push({ index: i, price: levelPrice });
+          sellLevels.push({ index: i, price: levelPrice, distance: Math.abs(levelPrice - centerPrice) });
         }
       }
 
-      // Tamaño objetivo por nivel: fracción equilibrada del capital activo
-      const targetOrderUsd = activeInvestment / (params.gridLevels - 1);
+      // Ordenar por cercanía al precio central
+      buyLevels.sort((a, b) => a.distance - b.distance);
+      sellLevels.sort((a, b) => a.distance - b.distance);
 
-      // 1. Distribuir USDT disponible en órdenes de COMPRA de hasta targetOrderUsd
-      for (const bl of buyLevels) {
+      const baseOrderUsd = activeInvestment / (params.gridLevels - 1);
+
+      // 1. Distribuir USDT con mayor peso a los niveles más cercanos
+      for (let idx = 0; idx < buyLevels.length; idx++) {
+        const bl = buyLevels[idx];
+        // Factor de ponderación: 1.25x para los más cercanos, descendiendo hacia 0.85x
+        const weightFactor = Math.max(0.80, 1.25 - (idx * 0.08));
+        const targetOrderUsd = baseOrderUsd * weightFactor;
+
         if (usdtFree >= targetOrderUsd * 0.1) {
           const orderCost = Math.min(targetOrderUsd, usdtFree);
           const amount = orderCost / bl.price;
@@ -137,9 +142,12 @@ export class MemoryEngine {
         }
       }
 
-      // 2. Distribuir BTC disponible en órdenes de VENTA de hasta targetOrderUsd
-      for (const sl of sellLevels) {
-        const targetBtc = targetOrderUsd / sl.price;
+      // 2. Distribuir BTC con mayor peso a los niveles de venta más cercanos
+      for (let idx = 0; idx < sellLevels.length; idx++) {
+        const sl = sellLevels[idx];
+        const weightFactor = Math.max(0.80, 1.25 - (idx * 0.08));
+        const targetBtc = (baseOrderUsd * weightFactor) / sl.price;
+
         if (btcFree >= targetBtc * 0.1) {
           const actualBtc = Math.min(targetBtc, btcFree);
           btcFree -= actualBtc;
@@ -161,18 +169,7 @@ export class MemoryEngine {
       const volume = candles.volumes[t];
       const dayIndex = Math.floor(time / (24 * 60 * 60 * 1000));
 
-      // A. Reinversión Mensual (Compounding)
-      if (enableCompounding && time - lastCompoundingTimestamp >= MONTH_MS) {
-        lastCompoundingTimestamp = time;
-        const totalUsdtNow = usdtFree + usdtLocked;
-        const totalBtcNow = btcFree + btcLockedActive + btcLockedLegacy;
-        const currentTotalEquity = totalUsdtNow + (totalBtcNow * close);
-        if (currentTotalEquity > activeInvestment) {
-          activeInvestment = currentTotalEquity;
-        }
-      }
-
-      // B. Agregación de Velas Superiores para ATR
+      // A. Agregación de Velas Superiores para ATR
       if (tfMinuteCount === 0) {
         currentTfOpen = open;
         currentTfHigh = high;
@@ -207,7 +204,7 @@ export class MemoryEngine {
         }
       }
 
-      // C. Evaluar Cortacircuitos (Velocity drop)
+      // B. Evaluar Cortacircuitos (Velocity drop)
       if (t >= params.circuitBreakerWindowMins) {
         const pastClose = candles.closes[t - params.circuitBreakerWindowMins];
         const dropPct = ((pastClose - low) / pastClose) * 100;
@@ -217,13 +214,13 @@ export class MemoryEngine {
       }
       const isCircuitBreakerActive = time < circuitBreakerTrippedUntil;
 
-      // D. Evaluar FomoGuard (Peak breakout)
+      // C. Evaluar FomoGuard (Peak breakout)
       if (high > currentGridUpper * 1.015 && time > fomoBlockedUntil) {
         fomoBlockedUntil = time + (params.fomoCooldownHours * 60 * 60 * 1000);
       }
       const isFomoBlocked = time < fomoBlockedUntil;
 
-      // E. Micro-secuencia de Fills Intra-Vela
+      // D. Micro-secuencia de Fills Intra-Vela
       const isGreenCandle = close >= open;
 
       const processBuyFills = () => {
@@ -275,12 +272,22 @@ export class MemoryEngine {
             totalTrades++;
             activeDaysSet.add(dayIndex);
 
-            // Generar contra-orden ("Flip") de COMPRA
-            const flipPrice = ord.price - currentStepSize;
-            const targetBuyCost = (activeInvestment / (params.gridLevels - 1));
-            const actualBuyCost = Math.min(targetBuyCost, ord.amount * flipPrice);
+            // Compounding Continuo: Actualizar inmediatamente el capital activo
+            if (enableCompounding) {
+              const currentTotalUsdt = usdtFree + usdtLocked;
+              const currentTotalBtc = btcFree + btcLockedActive + btcLockedLegacy;
+              const currentTotalEquity = currentTotalUsdt + (currentTotalBtc * close);
+              if (currentTotalEquity > activeInvestment) {
+                activeInvestment = currentTotalEquity;
+              }
+            }
 
-            if (!isCircuitBreakerActive && usdtFree >= actualBuyCost) {
+            // Generar contra-orden ("Flip") de COMPRA con capital actualizado
+            const flipPrice = ord.price - currentStepSize;
+            const targetBuyCost = activeInvestment / (params.gridLevels - 1);
+            const actualBuyCost = Math.min(targetBuyCost * 1.20, Math.max(ord.amount * flipPrice, usdtFree));
+
+            if (!isCircuitBreakerActive && usdtFree >= actualBuyCost && actualBuyCost >= 10) {
               const buyAmount = actualBuyCost / flipPrice;
               usdtFree -= actualBuyCost;
               usdtLocked += actualBuyCost;
@@ -307,7 +314,7 @@ export class MemoryEngine {
         processBuyFills();
       }
 
-      // F. Evaluar Fills en Bóveda Legacy (Cero venta a pérdida: solo ejecuta a su precio original alto)
+      // E. Evaluar Fills en Bóveda Legacy (Cero venta a pérdida: solo ejecuta a su precio original alto)
       for (let l = legacyOrders.length - 1; l >= 0; l--) {
         const legOrd = legacyOrders[l];
         if (high >= legOrd.price) {
@@ -321,10 +328,20 @@ export class MemoryEngine {
           totalTrades++;
           activeDaysSet.add(dayIndex);
           legacyOrders.splice(l, 1);
+
+          // Compounding continuo de liquidez liberada de Legacy
+          if (enableCompounding) {
+            const currentTotalUsdt = usdtFree + usdtLocked;
+            const currentTotalBtc = btcFree + btcLockedActive + btcLockedLegacy;
+            const currentTotalEquity = currentTotalUsdt + (currentTotalBtc * close);
+            if (currentTotalEquity > activeInvestment) {
+              activeInvestment = currentTotalEquity;
+            }
+          }
         }
       }
 
-      // G. Recentrado Dinámico Out-of-Bounds & Price Drift
+      // F. Recentrado Dinámico Out-of-Bounds & Price Drift
       const gridSpan = currentGridUpper - currentGridLower;
       if (gridSpan > 0 && !isCircuitBreakerActive && !isFomoBlocked) {
         const relativePosition = (close - currentGridLower) / gridSpan;
@@ -358,12 +375,12 @@ export class MemoryEngine {
             }
           }
 
-          // 3. Re-sembrar la nueva grilla con dimensión equilibrada
+          // 3. Re-sembrar la nueva grilla con ponderación por proximidad
           seedGridStrict(close, currentAtr);
         }
       }
 
-      // H. Cálculo Exacto de Patrimonio Total (Equity) & Drawdown
+      // G. Cálculo Exacto de Patrimonio Total (Equity) & Drawdown
       const totalUsdt = usdtFree + usdtLocked;
       const totalBtc = btcFree + btcLockedActive + btcLockedLegacy;
       const currentEquity = totalUsdt + (totalBtc * close);
