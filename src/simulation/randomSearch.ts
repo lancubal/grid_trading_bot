@@ -17,17 +17,17 @@ export interface ParameterSpace {
 }
 
 export const DEFAULT_PARAM_SPACE: ParameterSpace = {
-  gridLevels: [12, 30],
+  gridLevels: [10, 24],
   atrPeriod: [7, 28],
-  atrMultiplier: [1.5, 4.5],
-  minGridRangeUsd: [1200, 4000],
-  maxGridRangeUsd: [3500, 9000],
+  atrMultiplier: [2.0, 6.0],
+  minGridRangeUsd: [3000, 7000],
+  maxGridRangeUsd: [6000, 15000],
   priceDriftUpperThreshold: [0.65, 0.90],
   priceDriftLowerThreshold: [0.10, 0.35],
-  priceDriftCooldownMins: [10, 50],
-  circuitBreakerDropPct: [3.0, 7.0],
-  circuitBreakerWindowMins: [10, 40],
-  fomoCooldownHours: [2.0, 10.0],
+  priceDriftCooldownMins: [15, 60],
+  circuitBreakerDropPct: [3.5, 7.0],
+  circuitBreakerWindowMins: [15, 45],
+  fomoCooldownHours: [3.0, 12.0],
 };
 
 export interface CandidateEvaluation {

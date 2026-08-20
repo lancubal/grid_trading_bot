@@ -28,10 +28,10 @@ interface SimulatedOrder {
 
 /**
  * Motor de Simulación en Memoria de Alta Rentabilidad y Precisión Spot 1:1.
- * - Compounding Continuo en Tiempo Real (Re-inversión tick-by-tick por flip).
- * - Dimensionamiento Ponderado por Proximidad (Mayor capital en la zona central de oscilación rápida).
- * - Conservación de liquidez y reserva de USDT.
- * - Cero ventas a pérdida (Bóveda Legacy blindada).
+ * - Flips directos y fluidos (sin bloqueos artificiales).
+ * - Dimensionamiento Ponderado por Proximidad (Mayor capital en zona de oscilación).
+ * - Compounding Continuo en tiempo real.
+ * - Cero ventas a pérdida (Bóveda Legacy protegida).
  * - Comisiones exactas al 0.075% BNB.
  */
 export class MemoryEngine {
@@ -97,7 +97,7 @@ export class MemoryEngine {
     const legacyOrders: SimulatedOrder[] = [];
 
     /**
-     * Siembra o Rebalancea la Grilla con Dimensionamiento Ponderado por Proximidad (Proximity-Weighted Sizing)
+     * Siembra o Rebalancea la Grilla con Dimensionamiento Ponderado por Proximidad
      */
     const seedGridStrict = (centerPrice: number, atr: number) => {
       const rawRange = atr * params.atrMultiplier;
@@ -120,20 +120,18 @@ export class MemoryEngine {
         }
       }
 
-      // Ordenar por cercanía al precio central
       buyLevels.sort((a, b) => a.distance - b.distance);
       sellLevels.sort((a, b) => a.distance - b.distance);
 
       const baseOrderUsd = activeInvestment / (params.gridLevels - 1);
 
-      // 1. Distribuir USDT con mayor peso a los niveles más cercanos
+      // 1. Distribuir USDT libre en órdenes de compra
       for (let idx = 0; idx < buyLevels.length; idx++) {
         const bl = buyLevels[idx];
-        // Factor de ponderación: 1.25x para los más cercanos, descendiendo hacia 0.85x
-        const weightFactor = Math.max(0.80, 1.25 - (idx * 0.08));
+        const weightFactor = Math.max(0.85, 1.20 - (idx * 0.05));
         const targetOrderUsd = baseOrderUsd * weightFactor;
 
-        if (usdtFree >= targetOrderUsd * 0.1) {
+        if (usdtFree >= 5.0) {
           const orderCost = Math.min(targetOrderUsd, usdtFree);
           const amount = orderCost / bl.price;
           usdtFree -= orderCost;
@@ -142,13 +140,13 @@ export class MemoryEngine {
         }
       }
 
-      // 2. Distribuir BTC con mayor peso a los niveles de venta más cercanos
+      // 2. Distribuir BTC libre en órdenes de venta
       for (let idx = 0; idx < sellLevels.length; idx++) {
         const sl = sellLevels[idx];
-        const weightFactor = Math.max(0.80, 1.25 - (idx * 0.08));
+        const weightFactor = Math.max(0.85, 1.20 - (idx * 0.05));
         const targetBtc = (baseOrderUsd * weightFactor) / sl.price;
 
-        if (btcFree >= targetBtc * 0.1) {
+        if (btcFree >= 0.0001) {
           const actualBtc = Math.min(targetBtc, btcFree);
           btcFree -= actualBtc;
           btcLockedActive += actualBtc;
@@ -282,20 +280,18 @@ export class MemoryEngine {
               }
             }
 
-            // Generar contra-orden ("Flip") de COMPRA con capital actualizado
+            // Generar contra-orden ("Flip") de COMPRA con costo exacto directo
             const flipPrice = ord.price - currentStepSize;
-            const targetBuyCost = activeInvestment / (params.gridLevels - 1);
-            const actualBuyCost = Math.min(targetBuyCost * 1.20, Math.max(ord.amount * flipPrice, usdtFree));
+            const flipBuyCost = ord.amount * flipPrice;
 
-            if (!isCircuitBreakerActive && usdtFree >= actualBuyCost && actualBuyCost >= 10) {
-              const buyAmount = actualBuyCost / flipPrice;
-              usdtFree -= actualBuyCost;
-              usdtLocked += actualBuyCost;
+            if (!isCircuitBreakerActive && usdtFree >= flipBuyCost && flipBuyCost >= 5.0) {
+              usdtFree -= flipBuyCost;
+              usdtLocked += flipBuyCost;
               remainingOrders.push({
                 id: orderIdCounter++,
                 side: 'buy',
                 price: flipPrice,
-                amount: buyAmount,
+                amount: ord.amount,
                 levelIndex: ord.levelIndex - 1,
               });
             }
@@ -329,7 +325,6 @@ export class MemoryEngine {
           activeDaysSet.add(dayIndex);
           legacyOrders.splice(l, 1);
 
-          // Compounding continuo de liquidez liberada de Legacy
           if (enableCompounding) {
             const currentTotalUsdt = usdtFree + usdtLocked;
             const currentTotalBtc = btcFree + btcLockedActive + btcLockedLegacy;
@@ -352,7 +347,7 @@ export class MemoryEngine {
         if ((isOutOfRange || isDrifting) && time - lastDriftRebalanceTime >= cooldownMs) {
           lastDriftRebalanceTime = time;
 
-          // 1. Cancelar todas las compras abiertas liberando USDT locked ➔ free
+          // 1. Cancelar compras abiertas liberando USDT locked ➔ free
           for (const ord of activeOrders) {
             if (ord.side === 'buy') {
               const cost = ord.amount * ord.price;
@@ -375,7 +370,7 @@ export class MemoryEngine {
             }
           }
 
-          // 3. Re-sembrar la nueva grilla con ponderación por proximidad
+          // 3. Re-sembrar la nueva grilla
           seedGridStrict(close, currentAtr);
         }
       }
