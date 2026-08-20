@@ -27,10 +27,10 @@ interface SimulatedOrder {
 }
 
 /**
- * Motor de Simulación en Memoria de Alta Rentabilidad y Precisión Spot 1:1.
- * - Flips directos y fluidos (sin bloqueos artificiales).
- * - Dimensionamiento Ponderado por Proximidad (Mayor capital en zona de oscilación).
- * - Compounding Continuo en tiempo real.
+ * Motor de Simulación en Memoria con Compounding Realizado y Máxima Fuerza de Compra en Pisos.
+ * - Compounding basado estrictamente en ganancias netas realizadas (NUNCA se reduce por drawdown temporal).
+ * - Mantiene el 100% del poder de compra en fondos de mercado ($20,000 USD).
+ * - Dimensionamiento Ponderado por Proximidad.
  * - Cero ventas a pérdida (Bóveda Legacy protegida).
  * - Comisiones exactas al 0.075% BNB.
  */
@@ -48,6 +48,8 @@ export class MemoryEngine {
 
     // 1. Estado de Balances Físicos en Binance Spot
     let activeInvestment = params.investment;
+    let realizedNetProfitUsd = 0;
+
     let usdtFree = activeInvestment / 2;
     let usdtLocked = 0;
 
@@ -97,7 +99,7 @@ export class MemoryEngine {
     const legacyOrders: SimulatedOrder[] = [];
 
     /**
-     * Siembra o Rebalancea la Grilla con Dimensionamiento Ponderado por Proximidad
+     * Siembra o Rebalancea la Grilla con Dimensionamiento Ponderado
      */
     const seedGridStrict = (centerPrice: number, atr: number) => {
       const rawRange = atr * params.atrMultiplier;
@@ -125,7 +127,7 @@ export class MemoryEngine {
 
       const baseOrderUsd = activeInvestment / (params.gridLevels - 1);
 
-      // 1. Distribuir USDT libre en órdenes de compra
+      // 1. Distribuir USDT libre en órdenes de compra (priorizando niveles cercanos)
       for (let idx = 0; idx < buyLevels.length; idx++) {
         const bl = buyLevels[idx];
         const weightFactor = Math.max(0.85, 1.20 - (idx * 0.05));
@@ -140,7 +142,7 @@ export class MemoryEngine {
         }
       }
 
-      // 2. Distribuir BTC libre en órdenes de venta
+      // 2. Distribuir BTC libre en órdenes de venta (priorizando niveles cercanos)
       for (let idx = 0; idx < sellLevels.length; idx++) {
         const sl = sellLevels[idx];
         const weightFactor = Math.max(0.85, 1.20 - (idx * 0.05));
@@ -270,17 +272,16 @@ export class MemoryEngine {
             totalTrades++;
             activeDaysSet.add(dayIndex);
 
-            // Compounding Continuo: Actualizar inmediatamente el capital activo
+            // Compounding Realizado: La ganancia neta realizada expande el capital activo de la grilla
             if (enableCompounding) {
-              const currentTotalUsdt = usdtFree + usdtLocked;
-              const currentTotalBtc = btcFree + btcLockedActive + btcLockedLegacy;
-              const currentTotalEquity = currentTotalUsdt + (currentTotalBtc * close);
-              if (currentTotalEquity > activeInvestment) {
-                activeInvestment = currentTotalEquity;
+              const netProfitOnFlip = (ord.amount * currentStepSize) - (fee * 2);
+              if (netProfitOnFlip > 0) {
+                realizedNetProfitUsd += netProfitOnFlip;
+                activeInvestment = Math.max(params.investment, params.investment + realizedNetProfitUsd);
               }
             }
 
-            // Generar contra-orden ("Flip") de COMPRA con costo exacto directo
+            // Generar contra-orden ("Flip") de COMPRA
             const flipPrice = ord.price - currentStepSize;
             const flipBuyCost = ord.amount * flipPrice;
 
@@ -326,11 +327,10 @@ export class MemoryEngine {
           legacyOrders.splice(l, 1);
 
           if (enableCompounding) {
-            const currentTotalUsdt = usdtFree + usdtLocked;
-            const currentTotalBtc = btcFree + btcLockedActive + btcLockedLegacy;
-            const currentTotalEquity = currentTotalUsdt + (currentTotalBtc * close);
-            if (currentTotalEquity > activeInvestment) {
-              activeInvestment = currentTotalEquity;
+            const netProfitOnLegacy = (legOrd.amount * currentStepSize) - (fee * 2);
+            if (netProfitOnLegacy > 0) {
+              realizedNetProfitUsd += netProfitOnLegacy;
+              activeInvestment = Math.max(params.investment, params.investment + realizedNetProfitUsd);
             }
           }
         }
@@ -370,7 +370,7 @@ export class MemoryEngine {
             }
           }
 
-          // 3. Re-sembrar la nueva grilla
+          // 3. Re-sembrar la nueva grilla con dimensión completa
           seedGridStrict(close, currentAtr);
         }
       }
