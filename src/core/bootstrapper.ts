@@ -190,16 +190,34 @@ export class Bootstrapper {
   }
 
   /**
-   * Reactiva órdenes de la Bóveda Legacy que se encuentren dentro del rango operativo actual,
-   * cancelándolas en Binance Spot para liberar el inventario BTC a saldo libre y permitir que
-   * la grilla activa las re-siembre simétricamente.
+   * Reactiva y concilia órdenes de la Bóveda Legacy:
+   * 1. Si ya se ejecutaron offline en Binance ('closed'), las marca como FILLED en BD.
+   * 2. Si siguen abiertas pero su precio está dentro o por debajo del mercado (<= maxPriceThreshold),
+   *    las cancela en Binance para liberar el inventario BTC a saldo libre y permitir que
+   *    la grilla activa las re-siembre simétricamente.
    */
-  public async reactivateLegacyOrders(symbol: string, maxPriceThreshold: Decimal = new Decimal(66500)): Promise<number> {
-    console.log(`[Bootstrapper] 🏛️ Evaluando órdenes de Bóveda Legacy para reactivación (Umbral: <= $${maxPriceThreshold.toFixed(2)} USD)...`);
+  public async reactivateLegacyOrders(symbol: string, maxPriceThreshold: Decimal = new Decimal(999999)): Promise<number> {
+    console.log(`[Bootstrapper] 🏛️ Evaluando y conciliando órdenes de Bóveda Legacy (Umbral: <= $${maxPriceThreshold.toFixed(2)} USD)...`);
     const openLegacyOrders = await this.stateRepository.getOpenLegacyOrders();
     let reactivatedCount = 0;
 
     for (const legacyOrd of openLegacyOrders) {
+      if (legacyOrd.exchangeId) {
+        try {
+          const exOrder = await this.exchangeAdapter.fetchOrder(legacyOrd.exchangeId, symbol);
+          if (exOrder && exOrder.status === 'closed') {
+            await this.stateRepository.updateLegacyOrderStatusById(legacyOrd.id, 'FILLED');
+            console.log(`[Bootstrapper Legacy] ⚡ Orden Legacy ${legacyOrd.exchangeId} ($${legacyOrd.price}) ya figuraba ejecutada en Binance. Marcada como FILLED en BD.`);
+            continue;
+          } else if (exOrder && (exOrder.status === 'canceled' || exOrder.status === 'expired')) {
+            await this.stateRepository.updateLegacyOrderStatusById(legacyOrd.id, 'CANCELED');
+            continue;
+          }
+        } catch {
+          // Ignorar error si no se pudo consultar orden histórica
+        }
+      }
+
       const ordPrice = new Decimal(legacyOrd.price);
       if (ordPrice.lessThanOrEqualTo(maxPriceThreshold)) {
         if (legacyOrd.exchangeId) {
@@ -214,7 +232,7 @@ export class Bootstrapper {
       }
     }
 
-    console.log(`[Bootstrapper] 🚀 Reactivadas y liberadas ${reactivatedCount} órdenes de Bóveda Legacy a saldo Spot.`);
+    console.log(`[Bootstrapper] 🚀 Conciliadas/reactivadas ${reactivatedCount} órdenes de Bóveda Legacy a saldo Spot.`);
     return reactivatedCount;
   }
 }

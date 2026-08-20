@@ -450,8 +450,8 @@ async function main() {
 
   // 8. Ejecutar Reconciliador / Bootstrapper al reiniciar
   const bootstrapper = new Bootstrapper(exchangeAdapter, repository, gridManager);
-  // Reactivar inventario de la Bóveda Legacy dentro del rango de mercado operativo
-  const reactivatedCount = await bootstrapper.reactivateLegacyOrders(symbol, new Decimal(66500));
+  // Reactivar y conciliar inventario de la Bóveda Legacy con el mercado
+  const reactivatedCount = await bootstrapper.reactivateLegacyOrders(symbol);
   const reconcileRes = await bootstrapper.reconcile(symbol);
 
   if (reconcileRes.hasInvertedOrders || reactivatedCount > 0) {
@@ -537,8 +537,10 @@ async function main() {
   let tickCount = 0;
   let lastOobRebalanceTime = 0;
   let lastGapRebalanceTime = 0;
+  let lastBnbAlertTime = 0;
   const OOB_REBALANCE_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutos de cooldown entre recentrados por fuera de rango
   const GAP_REBALANCE_COOLDOWN_MS = 60 * 60 * 1000; // 1 hora de cooldown mínimo para el guardián de brechas
+  const BNB_ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 horas de cooldown para alerta de saldo bajo de BNB
 
   const tickerInterval = setInterval(async () => {
     try {
@@ -582,7 +584,7 @@ async function main() {
         await matchingEngine.processLivePrice(ticker.last);
       }
 
-      // DETECTOR INTELIGENTE DE DEPÓSITO DE CAPITAL EXTERNO (Recarga manual de USDT / BTC en Binance Spot)
+      // DETECTOR INTELIGENTE DE DEPÓSITO DE CAPITAL EXTERNO Y MONITOREO DE SALDO BNB
       if (tickCount % 30 === 0 && !env.DRY_RUN) {
         try {
           const bal = await exchangeAdapter.fetchBalance();
@@ -590,6 +592,21 @@ async function main() {
           const usdtUsed = bal.used['USDT'] ? new Decimal(bal.used['USDT']) : new Decimal(0);
           const btcFree = bal.free['BTC'] ? new Decimal(bal.free['BTC']) : new Decimal(0);
           const btcUsed = bal.used['BTC'] ? new Decimal(bal.used['BTC']) : new Decimal(0);
+          const bnbFree = bal.free['BNB'] ? new Decimal(bal.free['BNB']) : new Decimal(0);
+
+          // Monitoreo proactivo de saldo BNB para comisiones bonificadas al 0.075%
+          if (bnbFree.lessThan(0.015)) {
+            const now = Date.now();
+            if (now - lastBnbAlertTime >= BNB_ALERT_COOLDOWN_MS) {
+              lastBnbAlertTime = now;
+              await notifier.sendSlackMessage(
+                `⚠️ *ALERTA DE COMISIONES (SALDO BNB BAJO)*\n` +
+                `• *Saldo BNB Disponible:* ${bnbFree.toFixed(4)} BNB (~$${bnbFree.times(570).toFixed(2)} USD)\n` +
+                `• *Impacto:* Si el saldo de BNB se agota, Binance cobrará la comisión estándar (0.10% en lugar de 0.075%).\n` +
+                `• *Recomendación:* Recargar ~$20–$30 USD en BNB en Binance Spot para conservar el 25% de descuento en comisiones.`
+              );
+            }
+          }
 
           const totalUsdt = usdtFree.plus(usdtUsed);
           const totalBtc = btcFree.plus(btcUsed);

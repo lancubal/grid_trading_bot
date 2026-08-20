@@ -46,7 +46,7 @@ export function setupDailyReportCron(
         const orderVol = price.times(amount);
         totalVolumeUsd = totalVolumeUsd.plus(orderVol);
 
-        const feeCost = ord.feeCost ? new Decimal(ord.feeCost) : orderVol.times(0.001);
+        const feeCost = ord.feeCost ? new Decimal(ord.feeCost) : orderVol.times(0.00075);
         totalFeesUsd = totalFeesUsd.plus(feeCost);
 
         if (ord.side === OrderSide.BUY) {
@@ -64,7 +64,7 @@ export function setupDailyReportCron(
       let legacyRecoveredUsdt = new Decimal(0);
       for (const leg of filledLegacyOrders) {
         const legVol = new Decimal(leg.price).times(new Decimal(leg.amount));
-        const legFee = leg.feeCost ? new Decimal(leg.feeCost) : legVol.times(0.001);
+        const legFee = leg.feeCost ? new Decimal(leg.feeCost) : legVol.times(0.00075);
         legacyRecoveredUsdt = legacyRecoveredUsdt.plus(legVol.minus(legFee));
       }
 

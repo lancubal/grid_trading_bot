@@ -172,9 +172,15 @@ export class CcxtExchangeStreams extends EventEmitter implements IExchangeStream
       const filledDec = this.safeDecimal(rawOrder.filled);
       const remainingDec = this.safeDecimal(rawOrder.remaining);
 
-      if (!priceDec || !amountDec || !filledDec || !remainingDec) {
-        console.warn('[ExchangeStreams Zod Error] Valores numéricos o Decimal inválidos en payload:', rawOrder);
-        return null;
+      let feeObj: { currency: string; cost: Decimal } | undefined = undefined;
+      if (rawOrder.fee && rawOrder.fee.currency && rawOrder.fee.cost !== undefined) {
+        const feeCostDec = this.safeDecimal(rawOrder.fee.cost);
+        if (feeCostDec) {
+          feeObj = {
+            currency: String(rawOrder.fee.currency),
+            cost: feeCostDec,
+          };
+        }
       }
 
       const candidate = {
@@ -188,6 +194,7 @@ export class CcxtExchangeStreams extends EventEmitter implements IExchangeStream
         filled: filledDec,
         remaining: remainingDec,
         status: (rawOrder.status as any) || 'open',
+        fee: feeObj,
         timestamp: rawOrder.timestamp ?? Date.now(),
       };
 

@@ -119,7 +119,7 @@ function calculateGridNetProfit(filledOrders: Array<{
   for (const ord of sorted) {
     const price = new Decimal(ord.price.toString());
     const amount = new Decimal(ord.amount.toString());
-    const fee = ord.fee ? new Decimal(ord.fee.toString()) : price.times(amount).times(0.0005);
+    const fee = ord.fee ? new Decimal(ord.fee.toString()) : price.times(amount).times(0.000375);
 
     totalVolume = totalVolume.plus(price.times(amount));
     totalFees = totalFees.plus(fee);
@@ -144,7 +144,7 @@ function calculateGridNetProfit(filledOrders: Array<{
       } else {
         // Fallback estimado uniforme (paso predeterminado de grilla 0.25%)
         buyPrice = price.dividedBy(1.0025);
-        buyFee = buyPrice.times(amount).times(0.0005);
+        buyFee = buyPrice.times(amount).times(0.000375);
       }
 
       const grossSpread = price.minus(buyPrice).times(amount);
