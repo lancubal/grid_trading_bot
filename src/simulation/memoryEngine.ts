@@ -16,6 +16,8 @@ export interface BotHyperparameters {
   circuitBreakerWindowMins: number;
   fomoCooldownHours: number;
   enableContinuousCompounding?: boolean; // default: true
+  takeProfitMultiplier?: number; // default: 1.0 (1.0x a 2.0x del step)
+  buyCapitalWeight?: number; // default: 0.50 (0.50 a 0.70 para grilla asimétrica)
 }
 
 interface SimulatedOrder {
@@ -27,8 +29,9 @@ interface SimulatedOrder {
 }
 
 /**
- * Motor de Simulación en Memoria de Máximo ROI & Spot 1:1.
- * - Spread Dinámico según ATR: Grilla ultra-densa en baja volatilidad ($150-$250) y amplia en volatilidad ($600-$900).
+ * Motor de Simulación en Memoria con Grilla Asimétrica Alcista y Spot 1:1.
+ * - Take-Profit Asimétrico: Permite multiplicar el salto de profit en ventas (1.0x a 2.0x).
+ * - Ponderación Asimétrica de Capital: Asigna más peso a compras escalonadas (50% a 70%).
  * - Reinyección Inmediata de Liquidez Liberada de Bóveda Legacy.
  * - Ponderación Exponencial por Proximidad (1.35x en niveles centrales).
  * - Compounding Continuo en Ganancias Realizadas.
@@ -46,16 +49,18 @@ export class MemoryEngine {
 
     const durationDays = (candles.timestamps[totalCandles - 1] - candles.timestamps[0]) / (1000 * 60 * 60 * 24);
     const enableCompounding = params.enableContinuousCompounding !== false;
+    const takeProfitMult = params.takeProfitMultiplier || 1.0;
+    const buyCapWeight = params.buyCapitalWeight || 0.50;
 
     // 1. Estado de Balances Físicos en Binance Spot
     let activeInvestment = params.investment;
     let realizedNetProfitUsd = 0;
 
-    let usdtFree = activeInvestment / 2;
+    let usdtFree = activeInvestment * buyCapWeight;
     let usdtLocked = 0;
 
     const initialPrice = candles.opens[0];
-    let btcFree = (activeInvestment / 2) / initialPrice;
+    let btcFree = (activeInvestment * (1.0 - buyCapWeight)) / initialPrice;
     let btcLockedActive = 0;
     let btcLockedLegacy = 0;
 
@@ -100,7 +105,7 @@ export class MemoryEngine {
     const legacyOrders: SimulatedOrder[] = [];
 
     /**
-     * Siembra o Rebalancea la Grilla con Ponderación Exponencial por Proximidad
+     * Siembra o Rebalancea la Grilla con Ponderación Asimétrica
      */
     const seedGridStrict = (centerPrice: number, atr: number) => {
       const rawRange = atr * params.atrMultiplier;
@@ -239,8 +244,8 @@ export class MemoryEngine {
               totalTrades++;
               activeDaysSet.add(dayIndex);
 
-              // El BTC comprado pasa a orden Flip SELL
-              const flipPrice = ord.price + currentStepSize;
+              // El BTC comprado pasa a orden Flip SELL con Take-Profit Asimétrico
+              const flipPrice = ord.price + (currentStepSize * takeProfitMult);
               btcLockedActive += ord.amount;
               remainingOrders.push({
                 id: orderIdCounter++,
@@ -273,17 +278,17 @@ export class MemoryEngine {
             totalTrades++;
             activeDaysSet.add(dayIndex);
 
-            // Compounding Realizado
+            // Compounding Realizado: beneficio neto expande activeInvestment
             if (enableCompounding) {
-              const netProfitOnFlip = (ord.amount * currentStepSize) - (fee * 2);
-              if (netProfitOnFlip > 0) {
-                realizedNetProfitUsd += netProfitOnFlip;
+              const profitStep = (ord.amount * currentStepSize * takeProfitMult) - (fee * 2);
+              if (profitStep > 0) {
+                realizedNetProfitUsd += profitStep;
                 activeInvestment = Math.max(params.investment, params.investment + realizedNetProfitUsd);
               }
             }
 
             // Generar contra-orden ("Flip") de COMPRA
-            const flipPrice = ord.price - currentStepSize;
+            const flipPrice = ord.price - (currentStepSize * takeProfitMult);
             const flipBuyCost = ord.amount * flipPrice;
 
             if (!isCircuitBreakerActive && usdtFree >= flipBuyCost && flipBuyCost >= 5.0) {
@@ -335,7 +340,7 @@ export class MemoryEngine {
             }
           }
 
-          // Reinyección Activa Inmediata: si hay niveles de compra vacíos, colocar órdenes con la liquidez recuperada
+          // Reinyección Activa Inmediata
           if (!isCircuitBreakerActive && usdtFree > 50) {
             const emptyBuyLevelPrice = close - currentStepSize;
             const targetBuyUsd = Math.min(usdtFree * 0.5, activeInvestment / (params.gridLevels - 1));
@@ -389,7 +394,7 @@ export class MemoryEngine {
             }
           }
 
-          // 3. Re-sembrar la nueva grilla con dimensión completa
+          // 3. Re-sembrar la nueva grilla
           seedGridStrict(close, currentAtr);
         }
       }

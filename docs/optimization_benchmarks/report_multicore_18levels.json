@@ -1,0 +1,148 @@
+{
+  "date": "2026-08-20T22:05:59.732Z",
+  "hardware": "AMD Ryzen 7 3800XT 8-Core Processor (16 cores)",
+  "executionTimeSeconds": 310.253,
+  "champions": [
+    {
+      "rank": 1,
+      "params": {
+        "gridLevels": 18,
+        "investment": 10000,
+        "atrPeriod": 10,
+        "atrTimeframeMinutes": 60,
+        "atrMultiplier": 4.5,
+        "minGridRangeUsd": 7000,
+        "maxGridRangeUsd": 13357,
+        "priceDriftUpperThreshold": 0.9,
+        "priceDriftLowerThreshold": 0.17,
+        "priceDriftCooldownMins": 15,
+        "circuitBreakerDropPct": 6.6,
+        "circuitBreakerWindowMins": 15,
+        "fomoCooldownHours": 5.5,
+        "enableContinuousCompounding": true
+      },
+      "train": {
+        "initialCapital": 10000,
+        "finalEquity": 11814.71,
+        "netProfitUsd": 1814.71,
+        "roiPct": 18.15,
+        "annualizedRoiPct": 6.48,
+        "maxDrawdownPct": 71.02,
+        "totalTrades": 3564,
+        "totalVolumeUsd": 3552086.61,
+        "feesPaidUsd": 2664.06,
+        "holdingBtcFinal": 0.3988,
+        "activeDaysRatio": 0.2346,
+        "fitnessScore": 0.176
+      },
+      "test": {
+        "initialCapital": 10000,
+        "finalEquity": 14709.85,
+        "netProfitUsd": 4709.85,
+        "roiPct": 47.10,
+        "annualizedRoiPct": 39.24,
+        "maxDrawdownPct": 27.36,
+        "totalTrades": 3075,
+        "totalVolumeUsd": 2555361.15,
+        "feesPaidUsd": 1916.52,
+        "holdingBtcFinal": 0.1572,
+        "activeDaysRatio": 0.6255,
+        "fitnessScore": 3.579
+      }
+    },
+    {
+      "rank": 2,
+      "params": {
+        "gridLevels": 18,
+        "investment": 10000,
+        "atrPeriod": 11,
+        "atrTimeframeMinutes": 60,
+        "atrMultiplier": 4.3,
+        "minGridRangeUsd": 7000,
+        "maxGridRangeUsd": 13876,
+        "priceDriftUpperThreshold": 0.9,
+        "priceDriftLowerThreshold": 0.17,
+        "priceDriftCooldownMins": 17,
+        "circuitBreakerDropPct": 6.8,
+        "circuitBreakerWindowMins": 16,
+        "fomoCooldownHours": 5,
+        "enableContinuousCompounding": true
+      },
+      "train": {
+        "initialCapital": 10000,
+        "finalEquity": 11789.81,
+        "netProfitUsd": 1789.81,
+        "roiPct": 17.90,
+        "annualizedRoiPct": 6.39,
+        "maxDrawdownPct": 70.94,
+        "totalTrades": 3546,
+        "totalVolumeUsd": 3518304.97,
+        "feesPaidUsd": 2638.73,
+        "holdingBtcFinal": 0.3979,
+        "activeDaysRatio": 0.2346,
+        "fitnessScore": 0.174
+      },
+      "test": {
+        "initialCapital": 10000,
+        "finalEquity": 15329.46,
+        "netProfitUsd": 5329.46,
+        "roiPct": 53.29,
+        "annualizedRoiPct": 44.40,
+        "maxDrawdownPct": 27.02,
+        "totalTrades": 3335,
+        "totalVolumeUsd": 2866652.33,
+        "feesPaidUsd": 2149.99,
+        "holdingBtcFinal": 0.1638,
+        "activeDaysRatio": 0.6369,
+        "fitnessScore": 4.169
+      }
+    },
+    {
+      "rank": 3,
+      "params": {
+        "gridLevels": 18,
+        "investment": 10000,
+        "atrPeriod": 11,
+        "atrTimeframeMinutes": 60,
+        "atrMultiplier": 4.3,
+        "minGridRangeUsd": 7000,
+        "maxGridRangeUsd": 13876,
+        "priceDriftUpperThreshold": 0.9,
+        "priceDriftLowerThreshold": 0.17,
+        "priceDriftCooldownMins": 17,
+        "circuitBreakerDropPct": 6.7,
+        "circuitBreakerWindowMins": 16,
+        "fomoCooldownHours": 5,
+        "enableContinuousCompounding": true
+      },
+      "train": {
+        "initialCapital": 10000,
+        "finalEquity": 11757.47,
+        "netProfitUsd": 1757.47,
+        "roiPct": 17.57,
+        "annualizedRoiPct": 6.27,
+        "maxDrawdownPct": 71.02,
+        "totalTrades": 3544,
+        "totalVolumeUsd": 3506165.77,
+        "feesPaidUsd": 2629.62,
+        "holdingBtcFinal": 0.3968,
+        "activeDaysRatio": 0.2346,
+        "fitnessScore": 0.170
+      },
+      "test": {
+        "initialCapital": 10000,
+        "finalEquity": 15329.46,
+        "netProfitUsd": 5329.46,
+        "roiPct": 53.29,
+        "annualizedRoiPct": 44.40,
+        "maxDrawdownPct": 27.02,
+        "totalTrades": 3335,
+        "totalVolumeUsd": 2866652.33,
+        "feesPaidUsd": 2149.99,
+        "holdingBtcFinal": 0.1638,
+        "activeDaysRatio": 0.6369,
+        "fitnessScore": 4.169
+      }
+    }
+  ]
+}

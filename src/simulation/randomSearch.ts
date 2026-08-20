@@ -15,6 +15,8 @@ export interface ParameterSpace {
   circuitBreakerDropPct: [number, number];
   circuitBreakerWindowMins: [number, number];
   fomoCooldownHours: [number, number];
+  takeProfitMultiplier: [number, number];
+  buyCapitalWeight: [number, number];
 }
 
 export const DEFAULT_PARAM_SPACE: ParameterSpace = {
@@ -29,6 +31,8 @@ export const DEFAULT_PARAM_SPACE: ParameterSpace = {
   circuitBreakerDropPct: [3.5, 7.0],
   circuitBreakerWindowMins: [15, 45],
   fomoCooldownHours: [3.0, 12.0],
+  takeProfitMultiplier: [1.0, 2.0],
+  buyCapitalWeight: [0.50, 0.70],
 };
 
 export interface CandidateEvaluation {
@@ -61,6 +65,8 @@ export class RandomSearchOptimizer {
       circuitBreakerDropPct: randomFloat(space.circuitBreakerDropPct[0], space.circuitBreakerDropPct[1], 1),
       circuitBreakerWindowMins: randomInt(space.circuitBreakerWindowMins[0], space.circuitBreakerWindowMins[1]),
       fomoCooldownHours: randomFloat(space.fomoCooldownHours[0], space.fomoCooldownHours[1], 1),
+      takeProfitMultiplier: randomFloat(space.takeProfitMultiplier[0], space.takeProfitMultiplier[1], 1),
+      buyCapitalWeight: randomFloat(space.buyCapitalWeight[0], space.buyCapitalWeight[1], 2),
       enableContinuousCompounding: true,
     };
   }

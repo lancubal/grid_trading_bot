@@ -57,6 +57,8 @@ export class GeneticOptimizer {
       circuitBreakerDropPct: parseFloat(this.clamp(blend(parentA.circuitBreakerDropPct, parentB.circuitBreakerDropPct), space.circuitBreakerDropPct[0], space.circuitBreakerDropPct[1]).toFixed(1)),
       circuitBreakerWindowMins: Math.round(this.clamp(blend(parentA.circuitBreakerWindowMins, parentB.circuitBreakerWindowMins), space.circuitBreakerWindowMins[0], space.circuitBreakerWindowMins[1])),
       fomoCooldownHours: parseFloat(this.clamp(blend(parentA.fomoCooldownHours, parentB.fomoCooldownHours), space.fomoCooldownHours[0], space.fomoCooldownHours[1]).toFixed(1)),
+      takeProfitMultiplier: parseFloat(this.clamp(blend(parentA.takeProfitMultiplier || 1.0, parentB.takeProfitMultiplier || 1.0), space.takeProfitMultiplier[0], space.takeProfitMultiplier[1]).toFixed(1)),
+      buyCapitalWeight: parseFloat(this.clamp(blend(parentA.buyCapitalWeight || 0.50, parentB.buyCapitalWeight || 0.50), space.buyCapitalWeight[0], space.buyCapitalWeight[1]).toFixed(2)),
       enableContinuousCompounding: true,
     };
   }
@@ -86,6 +88,8 @@ export class GeneticOptimizer {
     mutated.circuitBreakerDropPct = parseFloat(mutateGene(mutated.circuitBreakerDropPct, space.circuitBreakerDropPct[0], space.circuitBreakerDropPct[1]).toFixed(1));
     mutated.circuitBreakerWindowMins = Math.round(mutateGene(mutated.circuitBreakerWindowMins, space.circuitBreakerWindowMins[0], space.circuitBreakerWindowMins[1]));
     mutated.fomoCooldownHours = parseFloat(mutateGene(mutated.fomoCooldownHours, space.fomoCooldownHours[0], space.fomoCooldownHours[1]).toFixed(1));
+    mutated.takeProfitMultiplier = parseFloat(mutateGene(mutated.takeProfitMultiplier || 1.0, space.takeProfitMultiplier[0], space.takeProfitMultiplier[1]).toFixed(1));
+    mutated.buyCapitalWeight = parseFloat(mutateGene(mutated.buyCapitalWeight || 0.50, space.buyCapitalWeight[0], space.buyCapitalWeight[1]).toFixed(2));
 
     return mutated;
   }
