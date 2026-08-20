@@ -60,6 +60,10 @@ export class GeneticOptimizer {
       takeProfitMultiplier: parseFloat(this.clamp(blend(parentA.takeProfitMultiplier || 1.0, parentB.takeProfitMultiplier || 1.0), space.takeProfitMultiplier[0], space.takeProfitMultiplier[1]).toFixed(1)),
       buyCapitalWeight: parseFloat(this.clamp(blend(parentA.buyCapitalWeight || 0.50, parentB.buyCapitalWeight || 0.50), space.buyCapitalWeight[0], space.buyCapitalWeight[1]).toFixed(2)),
       enableContinuousCompounding: true,
+      enableDualLayer: true,
+      microCapitalRatio: parseFloat(this.clamp(blend(parentA.microCapitalRatio || 0.35, parentB.microCapitalRatio || 0.35), space.microCapitalRatio[0], space.microCapitalRatio[1]).toFixed(2)),
+      microGridRangeUsd: Math.round(this.clamp(blend(parentA.microGridRangeUsd || 1800, parentB.microGridRangeUsd || 1800), space.microGridRangeUsd[0], space.microGridRangeUsd[1])),
+      microGridLevels: Math.round(this.clamp(pick(parentA.microGridLevels || 6, parentB.microGridLevels || 6), space.microGridLevels[0], space.microGridLevels[1])),
     };
   }
 
@@ -90,6 +94,9 @@ export class GeneticOptimizer {
     mutated.fomoCooldownHours = parseFloat(mutateGene(mutated.fomoCooldownHours, space.fomoCooldownHours[0], space.fomoCooldownHours[1]).toFixed(1));
     mutated.takeProfitMultiplier = parseFloat(mutateGene(mutated.takeProfitMultiplier || 1.0, space.takeProfitMultiplier[0], space.takeProfitMultiplier[1]).toFixed(1));
     mutated.buyCapitalWeight = parseFloat(mutateGene(mutated.buyCapitalWeight || 0.50, space.buyCapitalWeight[0], space.buyCapitalWeight[1]).toFixed(2));
+    mutated.microCapitalRatio = parseFloat(mutateGene(mutated.microCapitalRatio || 0.35, space.microCapitalRatio[0], space.microCapitalRatio[1]).toFixed(2));
+    mutated.microGridRangeUsd = Math.round(mutateGene(mutated.microGridRangeUsd || 1800, space.microGridRangeUsd[0], space.microGridRangeUsd[1]));
+    mutated.microGridLevels = Math.round(mutateGene(mutated.microGridLevels || 6, space.microGridLevels[0], space.microGridLevels[1]));
 
     return mutated;
   }

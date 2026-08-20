@@ -17,10 +17,13 @@ export interface ParameterSpace {
   fomoCooldownHours: [number, number];
   takeProfitMultiplier: [number, number];
   buyCapitalWeight: [number, number];
+  microCapitalRatio: [number, number];
+  microGridRangeUsd: [number, number];
+  microGridLevels: [number, number];
 }
 
 export const DEFAULT_PARAM_SPACE: ParameterSpace = {
-  gridLevels: [10, 24],
+  gridLevels: [8, 18],
   atrPeriod: [7, 28],
   atrMultiplier: [2.0, 6.0],
   minGridRangeUsd: [3000, 7000],
@@ -28,11 +31,14 @@ export const DEFAULT_PARAM_SPACE: ParameterSpace = {
   priceDriftUpperThreshold: [0.65, 0.90],
   priceDriftLowerThreshold: [0.10, 0.35],
   priceDriftCooldownMins: [15, 60],
-  circuitBreakerDropPct: [3.5, 7.0],
+  circuitBreakerDropPct: [3.5, 7.5],
   circuitBreakerWindowMins: [15, 45],
   fomoCooldownHours: [3.0, 12.0],
-  takeProfitMultiplier: [1.0, 2.0],
+  takeProfitMultiplier: [1.0, 2.2],
   buyCapitalWeight: [0.50, 0.70],
+  microCapitalRatio: [0.20, 0.45],
+  microGridRangeUsd: [1000, 2500],
+  microGridLevels: [5, 9],
 };
 
 export interface CandidateEvaluation {
@@ -68,6 +74,10 @@ export class RandomSearchOptimizer {
       takeProfitMultiplier: randomFloat(space.takeProfitMultiplier[0], space.takeProfitMultiplier[1], 1),
       buyCapitalWeight: randomFloat(space.buyCapitalWeight[0], space.buyCapitalWeight[1], 2),
       enableContinuousCompounding: true,
+      enableDualLayer: true,
+      microCapitalRatio: randomFloat(space.microCapitalRatio[0], space.microCapitalRatio[1], 2),
+      microGridRangeUsd: randomFloat(space.microGridRangeUsd[0], space.microGridRangeUsd[1], 0),
+      microGridLevels: randomInt(space.microGridLevels[0], space.microGridLevels[1]),
     };
   }
 

@@ -11,10 +11,11 @@ async function main() {
   const workerThreads = Math.max(1, cpus.length - 1);
 
   console.log('================================================================');
-  console.log('🧬 OPTIMIZADOR EVOLUTIVO DE ALTA VELOCIDAD & MULTI-THREADING (BTC/USDT SPOT)');
+  console.log('🧬 OPTIMIZADOR EVOLUTIVO MULTI-THREADING (ARQUITECTURA DE DOBLE CAPA)');
   console.log('================================================================');
   console.log(`• Procesador: ${cpus[0]?.model || 'CPU'} (${cpus.length} cores / ${workerThreads} workers paralelos)`);
   console.log(`• Capital Inicial: $10,000.00 USD (Spot 50% USDT / 50% BTC)`);
+  console.log(`• Arquitectura: Doble Capa Concurrente (Micro-Grid + Macro-Grid)`);
   console.log(`• Reinversión: Compounding Continuo + Reinyección Activa de Legacy`);
   console.log(`• Comisiones: 0.075% BNB Spot exacta por orden ejecutada`);
   console.log(`• Contabilidad: Spot 1:1 Estricta (Cero inventario fantasma)`);
@@ -136,6 +137,12 @@ async function main() {
     console.log(`CIRCUIT_BREAKER_DROP_PCT="${champion.params.circuitBreakerDropPct}"`);
     console.log(`CIRCUIT_BREAKER_WINDOW_MINS="${champion.params.circuitBreakerWindowMins}"`);
     console.log(`FOMO_COOLDOWN_HOURS="${champion.params.fomoCooldownHours}"`);
+    console.log(`TAKE_PROFIT_MULTIPLIER="${champion.params.takeProfitMultiplier || 1.0}"`);
+    console.log(`BUY_CAPITAL_WEIGHT="${champion.params.buyCapitalWeight || 0.50}"`);
+    console.log(`ENABLE_DUAL_LAYER="true"`);
+    console.log(`MICRO_CAPITAL_RATIO="${champion.params.microCapitalRatio || 0.35}"`);
+    console.log(`MICRO_GRID_RANGE_USD="${champion.params.microGridRangeUsd || 1800}.00"`);
+    console.log(`MICRO_GRID_LEVELS="${champion.params.microGridLevels || 6}"`);
   });
 
   const reportPath = path.join(path.resolve(__dirname, '../../datasets'), 'last_optimization_report.json');

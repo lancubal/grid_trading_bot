@@ -18,10 +18,15 @@ export interface BotHyperparameters {
   enableContinuousCompounding?: boolean; // default: true
   takeProfitMultiplier?: number; // default: 1.0 (1.0x a 2.0x del step)
   buyCapitalWeight?: number; // default: 0.50 (0.50 a 0.70 para grilla asimétrica)
+  enableDualLayer?: boolean; // default: true
+  microCapitalRatio?: number; // default: 0.35 (35% micro, 65% macro)
+  microGridRangeUsd?: number; // default: 1800 (rango de micro-grilla)
+  microGridLevels?: number; // default: 6 (niveles de micro-grilla)
 }
 
 interface SimulatedOrder {
   id: number;
+  layer: 'micro' | 'macro';
   side: 'buy' | 'sell';
   price: number;
   amount: number;
@@ -29,11 +34,10 @@ interface SimulatedOrder {
 }
 
 /**
- * Motor de Simulación en Memoria con Grilla Asimétrica Alcista y Spot 1:1.
- * - Take-Profit Asimétrico: Permite multiplicar el salto de profit en ventas (1.0x a 2.0x).
- * - Ponderación Asimétrica de Capital: Asigna más peso a compras escalonadas (50% a 70%).
- * - Reinyección Inmediata de Liquidez Liberada de Bóveda Legacy.
- * - Ponderación Exponencial por Proximidad (1.35x en niveles centrales).
+ * Motor de Simulación en Memoria con Arquitectura de Doble Capa (Micro/Macro) y Spot 1:1.
+ * - Capa Micro: Rango ultra-estrecho ($150-$250 step) para flujo continuo diario (15-30 trades/día).
+ * - Capa Macro: Rango amplio de swing con Take-Profit Asimétrico 2.0x para capturar grandes movimientos.
+ * - Ponderación Asimétrica de Capital y Reinyección Inmediata de Legacy.
  * - Compounding Continuo en Ganancias Realizadas.
  * - Cero ventas a pérdida (Bóveda Legacy protegida).
  * - Comisiones exactas al 0.075% BNB.
@@ -51,6 +55,9 @@ export class MemoryEngine {
     const enableCompounding = params.enableContinuousCompounding !== false;
     const takeProfitMult = params.takeProfitMultiplier || 1.0;
     const buyCapWeight = params.buyCapitalWeight || 0.50;
+    const isDualLayer = params.enableDualLayer !== false;
+    const microRatio = isDualLayer ? (params.microCapitalRatio || 0.35) : 0;
+    const macroRatio = 1.0 - microRatio;
 
     // 1. Estado de Balances Físicos en Binance Spot
     let activeInvestment = params.investment;
@@ -96,69 +103,117 @@ export class MemoryEngine {
 
     let currentAtr = Math.max(300, (candles.highs[0] - candles.lows[0]) * 10);
 
-    // 2. Grilla y Órdenes Activas
-    let currentGridLower = initialPrice - (params.minGridRangeUsd / 2);
-    let currentGridUpper = initialPrice + (params.minGridRangeUsd / 2);
-    let currentStepSize = (currentGridUpper - currentGridLower) / (params.gridLevels - 1);
+    // 2. Grillas Activas (Macro + Micro)
+    let currentMacroLower = initialPrice - (params.minGridRangeUsd / 2);
+    let currentMacroUpper = initialPrice + (params.minGridRangeUsd / 2);
+    let currentMacroStepSize = (currentMacroUpper - currentMacroLower) / (params.gridLevels - 1);
+
+    let currentMicroStepSize = (params.microGridRangeUsd || 1800) / Math.max(2, (params.microGridLevels || 6) - 1);
 
     let activeOrders: SimulatedOrder[] = [];
     const legacyOrders: SimulatedOrder[] = [];
 
     /**
-     * Siembra o Rebalancea la Grilla con Ponderación Asimétrica
+     * Siembra o Rebalancea la Grilla de Doble Capa
      */
     const seedGridStrict = (centerPrice: number, atr: number) => {
-      const rawRange = atr * params.atrMultiplier;
-      const clampedRange = Math.max(params.minGridRangeUsd, Math.min(params.maxGridRangeUsd, rawRange));
-      currentGridLower = centerPrice - (clampedRange / 2);
-      currentGridUpper = centerPrice + (clampedRange / 2);
-      currentStepSize = clampedRange / (params.gridLevels - 1);
+      const rawMacroRange = atr * params.atrMultiplier;
+      const clampedMacroRange = Math.max(params.minGridRangeUsd, Math.min(params.maxGridRangeUsd, rawMacroRange));
+      currentMacroLower = centerPrice - (clampedMacroRange / 2);
+      currentMacroUpper = centerPrice + (clampedMacroRange / 2);
+      currentMacroStepSize = clampedMacroRange / (params.gridLevels - 1);
+
+      const microRange = Math.min(clampedMacroRange * 0.40, params.microGridRangeUsd || 1800);
+      const microLevels = params.microGridLevels || 6;
+      currentMicroStepSize = microRange / Math.max(2, microLevels - 1);
 
       activeOrders = [];
 
-      const buyLevels: { index: number; price: number; distance: number }[] = [];
-      const sellLevels: { index: number; price: number; distance: number }[] = [];
+      // A. CAPA MACRO (60-70% del capital)
+      const macroInvest = activeInvestment * macroRatio;
+      const baseMacroOrderUsd = macroInvest / (params.gridLevels - 1);
+
+      const macroBuyLevels: { index: number; price: number; distance: number }[] = [];
+      const macroSellLevels: { index: number; price: number; distance: number }[] = [];
 
       for (let i = 0; i < params.gridLevels; i++) {
-        const levelPrice = currentGridLower + (i * currentStepSize);
+        const levelPrice = currentMacroLower + (i * currentMacroStepSize);
         if (levelPrice < centerPrice * 0.9995) {
-          buyLevels.push({ index: i, price: levelPrice, distance: Math.abs(centerPrice - levelPrice) });
+          macroBuyLevels.push({ index: i, price: levelPrice, distance: Math.abs(centerPrice - levelPrice) });
         } else if (levelPrice > centerPrice * 1.0005) {
-          sellLevels.push({ index: i, price: levelPrice, distance: Math.abs(levelPrice - centerPrice) });
+          macroSellLevels.push({ index: i, price: levelPrice, distance: Math.abs(levelPrice - centerPrice) });
         }
       }
 
-      buyLevels.sort((a, b) => a.distance - b.distance);
-      sellLevels.sort((a, b) => a.distance - b.distance);
+      macroBuyLevels.sort((a, b) => a.distance - b.distance);
+      macroSellLevels.sort((a, b) => a.distance - b.distance);
 
-      const baseOrderUsd = activeInvestment / (params.gridLevels - 1);
-
-      // 1. Distribuir USDT libre en órdenes de compra (Ponderación 1.35x en niveles centrales)
-      for (let idx = 0; idx < buyLevels.length; idx++) {
-        const bl = buyLevels[idx];
+      for (let idx = 0; idx < macroBuyLevels.length; idx++) {
+        const bl = macroBuyLevels[idx];
         const weightFactor = Math.max(0.75, 1.35 - (idx * 0.08));
-        const targetOrderUsd = baseOrderUsd * weightFactor;
+        const targetOrderUsd = baseMacroOrderUsd * weightFactor;
 
         if (usdtFree >= 5.0) {
           const orderCost = Math.min(targetOrderUsd, usdtFree);
           const amount = orderCost / bl.price;
           usdtFree -= orderCost;
           usdtLocked += orderCost;
-          activeOrders.push({ id: orderIdCounter++, side: 'buy', price: bl.price, amount, levelIndex: bl.index });
+          activeOrders.push({ id: orderIdCounter++, layer: 'macro', side: 'buy', price: bl.price, amount, levelIndex: bl.index });
         }
       }
 
-      // 2. Distribuir BTC libre en órdenes de venta (Ponderación 1.35x en niveles centrales)
-      for (let idx = 0; idx < sellLevels.length; idx++) {
-        const sl = sellLevels[idx];
+      for (let idx = 0; idx < macroSellLevels.length; idx++) {
+        const sl = macroSellLevels[idx];
         const weightFactor = Math.max(0.75, 1.35 - (idx * 0.08));
-        const targetBtc = (baseOrderUsd * weightFactor) / sl.price;
+        const targetBtc = (baseMacroOrderUsd * weightFactor) / sl.price;
 
         if (btcFree >= 0.0001) {
           const actualBtc = Math.min(targetBtc, btcFree);
           btcFree -= actualBtc;
           btcLockedActive += actualBtc;
-          activeOrders.push({ id: orderIdCounter++, side: 'sell', price: sl.price, amount: actualBtc, levelIndex: sl.index });
+          activeOrders.push({ id: orderIdCounter++, layer: 'macro', side: 'sell', price: sl.price, amount: actualBtc, levelIndex: sl.index });
+        }
+      }
+
+      // B. CAPA MICRO (30-40% del capital para micro-rotación)
+      if (isDualLayer && microRatio > 0.05) {
+        const microInvest = activeInvestment * microRatio;
+        const baseMicroOrderUsd = microInvest / Math.max(2, microLevels - 1);
+
+        const microBuyLevels: { index: number; price: number; distance: number }[] = [];
+        const microSellLevels: { index: number; price: number; distance: number }[] = [];
+
+        const microLower = centerPrice - (microRange / 2);
+        for (let j = 0; j < microLevels; j++) {
+          const mPrice = microLower + (j * currentMicroStepSize);
+          if (mPrice < centerPrice * 0.9995) {
+            microBuyLevels.push({ index: j, price: mPrice, distance: Math.abs(centerPrice - mPrice) });
+          } else if (mPrice > centerPrice * 1.0005) {
+            microSellLevels.push({ index: j, price: mPrice, distance: Math.abs(mPrice - centerPrice) });
+          }
+        }
+
+        microBuyLevels.sort((a, b) => a.distance - b.distance);
+        microSellLevels.sort((a, b) => a.distance - b.distance);
+
+        for (const mbl of microBuyLevels) {
+          if (usdtFree >= 5.0) {
+            const orderCost = Math.min(baseMicroOrderUsd, usdtFree);
+            const amount = orderCost / mbl.price;
+            usdtFree -= orderCost;
+            usdtLocked += orderCost;
+            activeOrders.push({ id: orderIdCounter++, layer: 'micro', side: 'buy', price: mbl.price, amount, levelIndex: mbl.index });
+          }
+        }
+
+        for (const msl of microSellLevels) {
+          const targetBtc = baseMicroOrderUsd / msl.price;
+          if (btcFree >= 0.0001) {
+            const actualBtc = Math.min(targetBtc, btcFree);
+            btcFree -= actualBtc;
+            btcLockedActive += actualBtc;
+            activeOrders.push({ id: orderIdCounter++, layer: 'micro', side: 'sell', price: msl.price, amount: actualBtc, levelIndex: msl.index });
+          }
         }
       }
     };
@@ -221,7 +276,7 @@ export class MemoryEngine {
       const isCircuitBreakerActive = time < circuitBreakerTrippedUntil;
 
       // C. Evaluar FomoGuard (Peak breakout)
-      if (high > currentGridUpper * 1.015 && time > fomoBlockedUntil) {
+      if (high > currentMacroUpper * 1.015 && time > fomoBlockedUntil) {
         fomoBlockedUntil = time + (params.fomoCooldownHours * 60 * 60 * 1000);
       }
       const isFomoBlocked = time < fomoBlockedUntil;
@@ -244,11 +299,13 @@ export class MemoryEngine {
               totalTrades++;
               activeDaysSet.add(dayIndex);
 
-              // El BTC comprado pasa a orden Flip SELL con Take-Profit Asimétrico
-              const flipPrice = ord.price + (currentStepSize * takeProfitMult);
+              // El BTC comprado pasa a orden Flip SELL
+              const step = ord.layer === 'micro' ? currentMicroStepSize : (currentMacroStepSize * takeProfitMult);
+              const flipPrice = ord.price + step;
               btcLockedActive += ord.amount;
               remainingOrders.push({
                 id: orderIdCounter++,
+                layer: ord.layer,
                 side: 'sell',
                 price: flipPrice,
                 amount: ord.amount,
@@ -278,9 +335,11 @@ export class MemoryEngine {
             totalTrades++;
             activeDaysSet.add(dayIndex);
 
-            // Compounding Realizado: beneficio neto expande activeInvestment
+            const step = ord.layer === 'micro' ? currentMicroStepSize : (currentMacroStepSize * takeProfitMult);
+
+            // Compounding Realizado
             if (enableCompounding) {
-              const profitStep = (ord.amount * currentStepSize * takeProfitMult) - (fee * 2);
+              const profitStep = (ord.amount * step) - (fee * 2);
               if (profitStep > 0) {
                 realizedNetProfitUsd += profitStep;
                 activeInvestment = Math.max(params.investment, params.investment + realizedNetProfitUsd);
@@ -288,7 +347,7 @@ export class MemoryEngine {
             }
 
             // Generar contra-orden ("Flip") de COMPRA
-            const flipPrice = ord.price - (currentStepSize * takeProfitMult);
+            const flipPrice = ord.price - step;
             const flipBuyCost = ord.amount * flipPrice;
 
             if (!isCircuitBreakerActive && usdtFree >= flipBuyCost && flipBuyCost >= 5.0) {
@@ -296,6 +355,7 @@ export class MemoryEngine {
               usdtLocked += flipBuyCost;
               remainingOrders.push({
                 id: orderIdCounter++,
+                layer: ord.layer,
                 side: 'buy',
                 price: flipPrice,
                 amount: ord.amount,
@@ -333,7 +393,7 @@ export class MemoryEngine {
           legacyOrders.splice(l, 1);
 
           if (enableCompounding) {
-            const netProfitOnLegacy = (legOrd.amount * currentStepSize) - (fee * 2);
+            const netProfitOnLegacy = (legOrd.amount * currentMacroStepSize) - (fee * 2);
             if (netProfitOnLegacy > 0) {
               realizedNetProfitUsd += netProfitOnLegacy;
               activeInvestment = Math.max(params.investment, params.investment + realizedNetProfitUsd);
@@ -342,7 +402,7 @@ export class MemoryEngine {
 
           // Reinyección Activa Inmediata
           if (!isCircuitBreakerActive && usdtFree > 50) {
-            const emptyBuyLevelPrice = close - currentStepSize;
+            const emptyBuyLevelPrice = close - currentMacroStepSize;
             const targetBuyUsd = Math.min(usdtFree * 0.5, activeInvestment / (params.gridLevels - 1));
             if (targetBuyUsd >= 10) {
               const buyAmt = targetBuyUsd / emptyBuyLevelPrice;
@@ -350,6 +410,7 @@ export class MemoryEngine {
               usdtLocked += targetBuyUsd;
               activeOrders.push({
                 id: orderIdCounter++,
+                layer: 'macro',
                 side: 'buy',
                 price: emptyBuyLevelPrice,
                 amount: buyAmt,
@@ -361,10 +422,10 @@ export class MemoryEngine {
       }
 
       // F. Recentrado Dinámico Out-of-Bounds & Price Drift
-      const gridSpan = currentGridUpper - currentGridLower;
+      const gridSpan = currentMacroUpper - currentMacroLower;
       if (gridSpan > 0 && !isCircuitBreakerActive && !isFomoBlocked) {
-        const relativePosition = (close - currentGridLower) / gridSpan;
-        const isOutOfRange = close < currentGridLower || close > currentGridUpper;
+        const relativePosition = (close - currentMacroLower) / gridSpan;
+        const isOutOfRange = close < currentMacroLower || close > currentMacroUpper;
         const isDrifting = relativePosition >= params.priceDriftUpperThreshold || relativePosition <= params.priceDriftLowerThreshold;
 
         const cooldownMs = params.priceDriftCooldownMins * 60 * 1000;
@@ -394,7 +455,7 @@ export class MemoryEngine {
             }
           }
 
-          // 3. Re-sembrar la nueva grilla
+          // 3. Re-sembrar la nueva grilla de doble capa
           seedGridStrict(close, currentAtr);
         }
       }
