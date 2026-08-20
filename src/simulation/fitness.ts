@@ -11,26 +11,17 @@ export interface SimulationMetrics {
   holdingBtcFinal: number;
   holdingBtcValueUsd: number;
   inventoryPenalty: number;
+  activeDaysRatio: number;
   fitnessScore: number;
 }
 
 /**
  * Módulo de evaluación de rendimiento y cálculo de la función de costo (Fitness Function).
- * Adapta el Ratio de Calmar con penalización por riesgo de inventario retenido.
+ * Maximiza el beneficio neto real en USD, el flujo continuo de flips y castiga la parálisis de liquidez.
  */
 export class FitnessCalculator {
   /**
    * Calcula el Fitness Score a partir de los resultados de una simulación
-   * @param initialCapital Capital inicial en USDT (ej: $2,000 USD)
-   * @param finalEquity Patrimonio final total valorizado en USDT (USDT + BTC * P_final)
-   * @param maxDrawdownPct Máxima caída porcentual de la curva de equity (0 a 100)
-   * @param totalTrades Cantidad total de órdenes completadas (fills)
-   * @param totalVolumeUsd Volumen total transaccionado en USD
-   * @param feesPaidUsd Total de comisiones pagadas en USD (tasa 0.075%)
-   * @param finalBtcBalance Cantidad de BTC retenida al finalizar
-   * @param finalBtcPrice Precio de BTC al finalizar la simulación
-   * @param durationDays Duración en días del período evaluado
-   * @param riskFreeRatePct Tasa libre de riesgo anual (default: 4.5% anual de Binance Simple Earn)
    */
   public static evaluate(
     initialCapital: number,
@@ -42,46 +33,39 @@ export class FitnessCalculator {
     finalBtcBalance: number,
     finalBtcPrice: number,
     durationDays: number,
-    riskFreeRatePct = 4.5
+    activeDaysCount: number = 0
   ): SimulationMetrics {
     const netProfitUsd = finalEquity - initialCapital;
     const roiPct = (netProfitUsd / initialCapital) * 100;
 
-    // Anualización del ROI
     const safeDays = Math.max(1, durationDays);
     const annualizedRoiPct = (roiPct * 365) / safeDays;
 
-    // Penalización por inventario retenido en la cima
+    // Proporción de días con actividad comercial
+    const activeDaysRatio = activeDaysCount > 0 ? Math.min(1, activeDaysCount / safeDays) : Math.min(1, totalTrades / (safeDays * 2));
+
+    // Penalización por inventario retenido en BTC al final
     const holdingBtcValueUsd = finalBtcBalance * finalBtcPrice;
     const btcRatio = holdingBtcValueUsd / (finalEquity > 0 ? finalEquity : 1);
-
-    // Si más del 50% del capital final quedó atrapado en BTC, se aplica una penalización proporcional
     let inventoryPenalty = 0;
-    if (btcRatio > 0.50) {
-      inventoryPenalty = (btcRatio - 0.50) * 0.50; // Hasta 25% de penalización si 100% es BTC
+    if (btcRatio > 0.60) {
+      inventoryPenalty = (btcRatio - 0.60) * 0.30;
     }
 
-    // Penalización si no operó casi nada (< 1 trade por semana)
-    const minExpectedTrades = Math.floor(safeDays / 7);
-    let activityPenalty = 0;
-    if (totalTrades < minExpectedTrades) {
-      activityPenalty = 0.50; // 50% de castigo por inactividad
+    // Factor de dinamismo por volumen de flips: log10(trades + 10)
+    const tradeFactor = Math.max(1, Math.log10(Math.max(10, totalTrades)));
+
+    // Ratio de Calmar Adaptado con premio por actividad constante
+    let fitnessScore: number;
+    if (netProfitUsd > 0) {
+      // Retorno positivo: premiar ROI y consistencia de trades
+      const safeDd = Math.max(1.0, maxDrawdownPct);
+      const baseCalmar = (annualizedRoiPct / safeDd) * tradeFactor;
+      fitnessScore = baseCalmar * (0.5 + 0.5 * activeDaysRatio) * (1 - inventoryPenalty);
+    } else {
+      // Retorno negativo: castigo proporcional a la pérdida y al drawdown
+      fitnessScore = (annualizedRoiPct - 10) * (1 + (maxDrawdownPct / 50));
     }
-
-    // Ratio de Calmar adaptado: (ROI_Anualizado - TasaLibreDeRiesgo) / (MaxDrawdown + Epsilon)
-    const excessReturn = annualizedRoiPct - riskFreeRatePct;
-    const safeDrawdown = Math.max(0.5, maxDrawdownPct); // Epsilon de 0.5% para evitar división por cero
-
-    let rawFitness = excessReturn / safeDrawdown;
-
-    // Si el retorno es negativo, el fitness es negativo proporcional a la pérdida
-    if (excessReturn < 0) {
-      rawFitness = excessReturn * (safeDrawdown / 10);
-    }
-
-    // Aplicar penalizaciones
-    const totalPenalty = Math.min(0.95, inventoryPenalty + activityPenalty);
-    const fitnessScore = rawFitness * (1 - totalPenalty);
 
     return {
       initialCapital,
@@ -96,6 +80,7 @@ export class FitnessCalculator {
       holdingBtcFinal: finalBtcBalance,
       holdingBtcValueUsd,
       inventoryPenalty,
+      activeDaysRatio,
       fitnessScore,
     };
   }

@@ -27,15 +27,15 @@ interface SimulatedOrder {
 }
 
 /**
- * Motor de Simulación en Memoria con Contabilidad Física Spot Estricta (1:1 con Binance Spot).
- * - Cero ventas a pérdida (el inventario en bóveda legacy queda bloqueado a su precio alto).
- * - Manejo riguroso de balances Free vs. Locked (USDT y BTC).
- * - Conservación absoluta de masa y capital.
- * - Micro-secuencia temporal intra-vela.
- * - Comisiones reales de 0.075% BNB.
+ * Motor de Simulación en Memoria con Gestión Inteligente de Liquidez y Spot 1:1.
+ * - Dimensionamiento equilibrado por orden (evita quemar el 100% de liquidez en caídas menores).
+ * - Conservación de reserva libre de USDT para comprar en pisos y recentrados.
+ * - Cero ventas a pérdida (Bóveda Legacy protegida).
+ * - Reinversión mensual de beneficios (Compounding).
+ * - Comisiones exactas al 0.075% BNB.
  */
 export class MemoryEngine {
-  public static readonly FEE_RATE = 0.00075; // 0.075% con 25% de descuento BNB
+  public static readonly FEE_RATE = 0.00075; // 0.075% BNB discount fee rate
 
   public static run(candles: CandleBuffer, params: BotHyperparameters): SimulationMetrics {
     const totalCandles = candles.length;
@@ -65,7 +65,10 @@ export class MemoryEngine {
     let feesPaidUsd = 0;
     let orderIdCounter = 1;
 
-    // Estado de Cortacircuitos, FOMO y Compounding
+    // Rastrear días activos con fills
+    const activeDaysSet = new Set<number>();
+
+    // Estado del Cortacircuitos, FOMO y Compounding
     let circuitBreakerTrippedUntil = 0;
     let fomoBlockedUntil = 0;
     let lastDriftRebalanceTime = 0;
@@ -96,7 +99,8 @@ export class MemoryEngine {
     const legacyOrders: SimulatedOrder[] = [];
 
     /**
-     * Siembra o Rebalancea la Grilla con Bloqueo Físico Estricto
+     * Siembra o Rebalancea la Grilla con Dimensionamiento Equilibrado
+     * Coloca órdenes de tamaño TargetOrderValue preservando USDT de reserva.
      */
     const seedGridStrict = (centerPrice: number, atr: number) => {
       const rawRange = atr * params.atrMultiplier;
@@ -119,25 +123,28 @@ export class MemoryEngine {
         }
       }
 
-      // 1. Distribuir USDT libre disponible bloqueándolo en órdenes de COMPRA
-      if (buyLevels.length > 0 && usdtFree > 10) {
-        const usdtPerBuy = usdtFree / buyLevels.length;
-        for (const bl of buyLevels) {
-          const amount = usdtPerBuy / bl.price;
-          const cost = amount * bl.price;
-          usdtFree -= cost;
-          usdtLocked += cost;
+      // Tamaño objetivo por nivel: fracción equilibrada del capital activo
+      const targetOrderUsd = activeInvestment / (params.gridLevels - 1);
+
+      // 1. Distribuir USDT disponible en órdenes de COMPRA de hasta targetOrderUsd
+      for (const bl of buyLevels) {
+        if (usdtFree >= targetOrderUsd * 0.1) {
+          const orderCost = Math.min(targetOrderUsd, usdtFree);
+          const amount = orderCost / bl.price;
+          usdtFree -= orderCost;
+          usdtLocked += orderCost;
           activeOrders.push({ id: orderIdCounter++, side: 'buy', price: bl.price, amount, levelIndex: bl.index });
         }
       }
 
-      // 2. Distribuir BTC libre disponible bloqueándolo en órdenes de VENTA
-      if (sellLevels.length > 0 && btcFree > 0.0001) {
-        const btcPerSell = btcFree / sellLevels.length;
-        for (const sl of sellLevels) {
-          btcFree -= btcPerSell;
-          btcLockedActive += btcPerSell;
-          activeOrders.push({ id: orderIdCounter++, side: 'sell', price: sl.price, amount: btcPerSell, levelIndex: sl.index });
+      // 2. Distribuir BTC disponible en órdenes de VENTA de hasta targetOrderUsd
+      for (const sl of sellLevels) {
+        const targetBtc = targetOrderUsd / sl.price;
+        if (btcFree >= targetBtc * 0.1) {
+          const actualBtc = Math.min(targetBtc, btcFree);
+          btcFree -= actualBtc;
+          btcLockedActive += actualBtc;
+          activeOrders.push({ id: orderIdCounter++, side: 'sell', price: sl.price, amount: actualBtc, levelIndex: sl.index });
         }
       }
     };
@@ -152,6 +159,7 @@ export class MemoryEngine {
       const low = candles.lows[t];
       const close = candles.closes[t];
       const volume = candles.volumes[t];
+      const dayIndex = Math.floor(time / (24 * 60 * 60 * 1000));
 
       // A. Reinversión Mensual (Compounding)
       if (enableCompounding && time - lastCompoundingTimestamp >= MONTH_MS) {
@@ -227,12 +235,13 @@ export class MemoryEngine {
               const fee = cost * MemoryEngine.FEE_RATE;
 
               usdtLocked -= cost;
-              usdtFree = Math.max(0, usdtFree - fee); // Comisión debitada
+              usdtFree = Math.max(0, usdtFree - fee);
               feesPaidUsd += fee;
               totalVolumeUsd += cost;
               totalTrades++;
+              activeDaysSet.add(dayIndex);
 
-              // El BTC comprado se pasa inmediatamente a orden Flip SELL
+              // El BTC comprado pasa a orden Flip SELL
               const flipPrice = ord.price + currentStepSize;
               btcLockedActive += ord.amount;
               remainingOrders.push({
@@ -264,19 +273,22 @@ export class MemoryEngine {
             feesPaidUsd += fee;
             totalVolumeUsd += revenue;
             totalTrades++;
+            activeDaysSet.add(dayIndex);
 
             // Generar contra-orden ("Flip") de COMPRA
             const flipPrice = ord.price - currentStepSize;
-            const buyCost = ord.amount * flipPrice;
+            const targetBuyCost = (activeInvestment / (params.gridLevels - 1));
+            const actualBuyCost = Math.min(targetBuyCost, ord.amount * flipPrice);
 
-            if (!isCircuitBreakerActive && usdtFree >= buyCost) {
-              usdtFree -= buyCost;
-              usdtLocked += buyCost;
+            if (!isCircuitBreakerActive && usdtFree >= actualBuyCost) {
+              const buyAmount = actualBuyCost / flipPrice;
+              usdtFree -= actualBuyCost;
+              usdtLocked += actualBuyCost;
               remainingOrders.push({
                 id: orderIdCounter++,
                 side: 'buy',
                 price: flipPrice,
-                amount: ord.amount,
+                amount: buyAmount,
                 levelIndex: ord.levelIndex - 1,
               });
             }
@@ -307,6 +319,7 @@ export class MemoryEngine {
           feesPaidUsd += fee;
           totalVolumeUsd += rev;
           totalTrades++;
+          activeDaysSet.add(dayIndex);
           legacyOrders.splice(l, 1);
         }
       }
@@ -331,9 +344,7 @@ export class MemoryEngine {
             }
           }
 
-          // 2. Gestionar ventas abiertas:
-          // Las que están por encima del mercado se archivan en Legacy (BTC queda bloqueado GTC en precio alto)
-          // Las que están cerca o por debajo se cancelan liberando BTC locked ➔ free
+          // 2. Archivar ventas superiores en Legacy / Cancelar ventas bajas
           for (const ord of activeOrders) {
             if (ord.side === 'sell') {
               if (ord.price > close * 1.005) {
@@ -347,7 +358,7 @@ export class MemoryEngine {
             }
           }
 
-          // 3. Re-sembrar la nueva grilla utilizando ÚNICAMENTE los saldos libres (usdtFree y btcFree)
+          // 3. Re-sembrar la nueva grilla con dimensión equilibrada
           seedGridStrict(close, currentAtr);
         }
       }
@@ -380,7 +391,8 @@ export class MemoryEngine {
       feesPaidUsd,
       totalFinalBtc,
       finalPrice,
-      durationDays
+      durationDays,
+      activeDaysSet.size
     );
   }
 }
