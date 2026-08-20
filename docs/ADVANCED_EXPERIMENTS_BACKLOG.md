@@ -1,10 +1,21 @@
 # 🚀 Backlog de Experimentos Avanzados & Roadmap Cuantitativo
 
-Este documento lleva el registro estructurado de todas las ideas cuantitativas, arquitecturas de control y experimentos a probar en fases posteriores.
+Este documento lleva el registro estructurado de todas las ideas cuantitativas, arquitecturas de control y experimentos probados en la simulación genética de alta fidelidad.
 
 ---
 
-## 🎛️ 1. Control Integral PID & Orquestador de Régimen de Mercado
+## 🏆 Historial de Benchmarks Evolutivos (Test Ciego 2023–2024)
+
+| Fase / Arquitectura | ROI Total Test | APY Anualizado | Ganancia Neta ($10k) | Trades en Test | Reporte Guardado |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **1. Grilla Simétrica 18 Niveles** | +53.29% | 44.40% | +$5,329.46 USD | 3,335 trades | [`report_multicore_18levels.json`](file:///home/luna/repos/dayTradingBot/docs/optimization_benchmarks/report_multicore_18levels.json) |
+| **2. Grilla Simétrica 11 Niveles (100x30)** | +69.57% | 57.97% | +$6,957.47 USD | 1,377 trades | [`report_multicore_100x30.json`](file:///home/luna/repos/dayTradingBot/docs/optimization_benchmarks/report_multicore_100x30.json) |
+| **3. Grilla Asimétrica Alcista** | +90.69% | 75.56% | +$9,068.53 USD | 863 trades | Registrado en bitácora |
+| 👑 **4. Doble Capa Micro/Macro Grid** | **`+93.98%`** | **`78.30% anual`** | **`+$9,397.79 USD`** | **`2,082 trades`** | [`report_multicore_dual_layer.json`](file:///home/luna/repos/dayTradingBot/docs/optimization_benchmarks/report_multicore_dual_layer.json) |
+
+---
+
+## 🎛️ 1. Control Integral PID & Orquestador de Régimen de Mercado (Macro Controller)
 * **Concepto:** Mapeo de la teoría de control clásica (PID) para añadir un nivel de control superior a largo plazo.
   * **P (Proporcional):** ATR dinámico instantáneo adaptando el ancho de la grilla.
   * **D (Derivativo):** Cortacircuitos (velocity dump) y FomoGuard (peak breakout).
@@ -15,11 +26,11 @@ Este documento lleva el registro estructurado de todas las ideas cuantitativas, 
 ---
 
 ## ⚡ 2. Arquitectura de Doble Capa (Micro-Grid + Macro-Grid Layering)
-* **Concepto:** Dividir el capital en dos grillas superpuestas y concurrentes:
-  * **Capa Rápida (40% capital):** 6 niveles ultra-densos con $\Delta = \$150 - \$220\text{ USD}$ para cosechar entre 15 y 30 micro-flips diarios en mercados laterales.
-  * **Capa Lenta (60% capital):** 5 niveles amplios con $\Delta = \$1,000 - \$1,500\text{ USD}$ como red de amortiguación pesada ante grandes oscilaciones de mercado.
-* **Beneficio Esperado:** Máxima frecuencia diaria de flujo de caja + robustez ante grandes tendencias.
-* **Estado:** En backlog para testing comparativo.
+* **Resultado:** Validada con **`+93.98% ROI / 78.30% APY`** y más de **2,080 trades**.
+* **Configuración Ganadora (Campeón #3):**
+  * **Macro Grid:** 9 niveles, rango $7,000 - $8,800 USD, Take-Profit asimétrico 1.8x.
+  * **Micro Grid:** 6 niveles, rango $2,240 USD (pasos de ~$250 USD) con 25% del capital.
+* **Estado:** Implementada y lista para migrar a producción.
 
 ---
 
@@ -31,10 +42,3 @@ Este documento lleva el registro estructurado de todas las ideas cuantitativas, 
   * Ventana 4: Train 2023 ➔ Test 2024 (Rally institucional y All-Time Highs).
 * **Beneficio Esperado:** Certificación matemática de robustez contra sobreajuste (*overfitting*).
 * **Estado:** En backlog de validación final.
-
----
-
-## 📊 4. Registro de Benchmarks Históricos
-* **Benchmark 1 (Grid Simétrica 18 Niveles Multi-Core):** [`docs/optimization_benchmarks/report_multicore_18levels.json`](file:///home/luna/repos/dayTradingBot/docs/optimization_benchmarks/report_multicore_18levels.json) — +53.29% ROI Test / 44.4% APY.
-* **Benchmark 2 (Grid Simétrica 11 Niveles 100x30):** +69.57% ROI Test / 57.97% APY ($6,957 USD netos).
-* **Benchmark 3 (Grilla Asimétrica Alcista - En curso):** Evaluando multiplicador de profit `1.0x - 2.0x` y asignación de capital `50% - 70%`.
