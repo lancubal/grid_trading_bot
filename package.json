@@ -9,6 +9,8 @@
     "dev": "tsx watch src/index.ts",
     "backtest": "tsx src/backtest/run.ts",
     "backtest:batch": "tsx src/backtest/batch.ts",
+    "download-data": "tsx src/simulation/downloadData.ts",
+    "optimize": "tsx src/simulation/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "db:migrate": "npx prisma migrate dev",
@@ -26,6 +28,8 @@
   "license": "ISC",
   "dependencies": {
     "@prisma/client": "^5.22.0",
+    "adm-zip": "^0.6.0",
+    "axios": "^1.19.0",
     "ccxt": "^4.4.0",
     "decimal.js": "^10.4.3",
     "dotenv": "^16.4.5",
@@ -33,6 +37,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/node": "^20.17.0",
     "@types/node-cron": "^3.0.11",
     "prisma": "^5.22.0",

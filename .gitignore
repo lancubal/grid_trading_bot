@@ -6,6 +6,9 @@ dist/
 
 # Cached historical datasets
 data/*.json
+datasets/*.csv
+datasets/*.zip
+datasets/*.parquet
 
 # Environment variables
 .env
