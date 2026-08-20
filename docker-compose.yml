@@ -37,9 +37,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 384M
+          memory: 512M
         reservations:
-          memory: 192M
+          memory: 256M
     logging:
       driver: "json-file"
       options:
@@ -52,8 +52,8 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-grid_bot}?schema=public
-      NODE_OPTIONS: "--max-old-space-size=256"
-    command: sh -c "npx prisma migrate resolve --applied 20260721111600_init_schema 2>/dev/null || true; npx prisma migrate resolve --applied 20260730144700_add_fee_currency_and_cost 2>/dev/null || true; npx prisma migrate deploy || npx prisma db push && node dist/index.js"
+      NODE_OPTIONS: "--max-old-space-size=384"
+    command: sh -c "npx prisma db push --accept-data-loss && node dist/index.js"
 
 volumes:
   postgres_data:
