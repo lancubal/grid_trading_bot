@@ -15,7 +15,7 @@ async function main() {
   console.log('================================================================');
   console.log(`• Procesador: ${cpus[0]?.model || 'CPU'} (${cpus.length} cores / ${workerThreads} workers paralelos)`);
   console.log(`• Capital Inicial: $10,000.00 USD (Spot 50% USDT / 50% BTC)`);
-  console.log(`• Reinversión: Compounding Continuo (Ganancias realizadas)`);
+  console.log(`• Reinversión: Compounding Continuo + Reinyección Activa de Legacy`);
   console.log(`• Comisiones: 0.075% BNB Spot exacta por orden ejecutada`);
   console.log(`• Contabilidad: Spot 1:1 Estricta (Cero inventario fantasma)`);
 
@@ -33,11 +33,11 @@ async function main() {
   // 1. Cargar y particionar dataset
   const dataset = await DatasetLoader.load(datasetPath, 0.70);
 
-  // 2. FASE 1: Random Search Multi-Thread (Exploración Global)
+  // 2. FASE 1: Random Search Multi-Thread (500 Iteraciones)
   console.log('----------------------------------------------------------------');
   console.log(`🔍 FASE 1: RANDOM SEARCH PARALELO (${workerThreads} Hilos Concurrente)`);
   console.log('----------------------------------------------------------------');
-  const RANDOM_ITERATIONS = 400;
+  const RANDOM_ITERATIONS = 500;
   console.log(`• Evaluando ${RANDOM_ITERATIONS} configuraciones sobre Train Set (70%)...`);
 
   const t0 = Date.now();
@@ -55,12 +55,12 @@ async function main() {
   console.log(`\n✅ Fase 1 completada en ${((Date.now() - t0) / 1000).toFixed(2)}s.`);
   console.log(`🏆 Mejor Candidato Fase 1: Fitness ${randomResults[0].metrics.fitnessScore.toFixed(2)} | ROI ${randomResults[0].metrics.roiPct.toFixed(2)}% | Ganancia Neta: $${randomResults[0].metrics.netProfitUsd.toFixed(2)} USD\n`);
 
-  // 3. FASE 2: Algoritmo Genético Multi-Thread
+  // 3. FASE 2: Algoritmo Genético Multi-Thread (100 Individuos x 30 Generaciones)
   console.log('----------------------------------------------------------------');
   console.log(`🧬 FASE 2: ALGORITMO GENÉTICO PARALELO (${workerThreads} Hilos Concurrente)`);
   console.log('----------------------------------------------------------------');
-  const POPULATION_SIZE = 60;
-  const GENERATIONS = 20;
+  const POPULATION_SIZE = 100;
+  const GENERATIONS = 30;
   console.log(`• Población: ${POPULATION_SIZE} individuos | Generaciones: ${GENERATIONS}`);
   console.log(`• Sembrando Generación 0 con los mejores ${POPULATION_SIZE} candidatos de Fase 1...`);
 

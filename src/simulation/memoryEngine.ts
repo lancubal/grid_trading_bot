@@ -27,10 +27,11 @@ interface SimulatedOrder {
 }
 
 /**
- * Motor de Simulación en Memoria con Compounding Realizado y Máxima Fuerza de Compra en Pisos.
- * - Compounding basado estrictamente en ganancias netas realizadas (NUNCA se reduce por drawdown temporal).
- * - Mantiene el 100% del poder de compra en fondos de mercado ($20,000 USD).
- * - Dimensionamiento Ponderado por Proximidad.
+ * Motor de Simulación en Memoria de Máximo ROI & Spot 1:1.
+ * - Spread Dinámico según ATR: Grilla ultra-densa en baja volatilidad ($150-$250) y amplia en volatilidad ($600-$900).
+ * - Reinyección Inmediata de Liquidez Liberada de Bóveda Legacy.
+ * - Ponderación Exponencial por Proximidad (1.35x en niveles centrales).
+ * - Compounding Continuo en Ganancias Realizadas.
  * - Cero ventas a pérdida (Bóveda Legacy protegida).
  * - Comisiones exactas al 0.075% BNB.
  */
@@ -99,7 +100,7 @@ export class MemoryEngine {
     const legacyOrders: SimulatedOrder[] = [];
 
     /**
-     * Siembra o Rebalancea la Grilla con Dimensionamiento Ponderado
+     * Siembra o Rebalancea la Grilla con Ponderación Exponencial por Proximidad
      */
     const seedGridStrict = (centerPrice: number, atr: number) => {
       const rawRange = atr * params.atrMultiplier;
@@ -127,10 +128,10 @@ export class MemoryEngine {
 
       const baseOrderUsd = activeInvestment / (params.gridLevels - 1);
 
-      // 1. Distribuir USDT libre en órdenes de compra (priorizando niveles cercanos)
+      // 1. Distribuir USDT libre en órdenes de compra (Ponderación 1.35x en niveles centrales)
       for (let idx = 0; idx < buyLevels.length; idx++) {
         const bl = buyLevels[idx];
-        const weightFactor = Math.max(0.85, 1.20 - (idx * 0.05));
+        const weightFactor = Math.max(0.75, 1.35 - (idx * 0.08));
         const targetOrderUsd = baseOrderUsd * weightFactor;
 
         if (usdtFree >= 5.0) {
@@ -142,10 +143,10 @@ export class MemoryEngine {
         }
       }
 
-      // 2. Distribuir BTC libre en órdenes de venta (priorizando niveles cercanos)
+      // 2. Distribuir BTC libre en órdenes de venta (Ponderación 1.35x en niveles centrales)
       for (let idx = 0; idx < sellLevels.length; idx++) {
         const sl = sellLevels[idx];
-        const weightFactor = Math.max(0.85, 1.20 - (idx * 0.05));
+        const weightFactor = Math.max(0.75, 1.35 - (idx * 0.08));
         const targetBtc = (baseOrderUsd * weightFactor) / sl.price;
 
         if (btcFree >= 0.0001) {
@@ -272,7 +273,7 @@ export class MemoryEngine {
             totalTrades++;
             activeDaysSet.add(dayIndex);
 
-            // Compounding Realizado: La ganancia neta realizada expande el capital activo de la grilla
+            // Compounding Realizado
             if (enableCompounding) {
               const netProfitOnFlip = (ord.amount * currentStepSize) - (fee * 2);
               if (netProfitOnFlip > 0) {
@@ -311,7 +312,7 @@ export class MemoryEngine {
         processBuyFills();
       }
 
-      // E. Evaluar Fills en Bóveda Legacy (Cero venta a pérdida: solo ejecuta a su precio original alto)
+      // E. Evaluar Fills en Bóveda Legacy & Reinyección Activa de Liquidez
       for (let l = legacyOrders.length - 1; l >= 0; l--) {
         const legOrd = legacyOrders[l];
         if (high >= legOrd.price) {
@@ -331,6 +332,24 @@ export class MemoryEngine {
             if (netProfitOnLegacy > 0) {
               realizedNetProfitUsd += netProfitOnLegacy;
               activeInvestment = Math.max(params.investment, params.investment + realizedNetProfitUsd);
+            }
+          }
+
+          // Reinyección Activa Inmediata: si hay niveles de compra vacíos, colocar órdenes con la liquidez recuperada
+          if (!isCircuitBreakerActive && usdtFree > 50) {
+            const emptyBuyLevelPrice = close - currentStepSize;
+            const targetBuyUsd = Math.min(usdtFree * 0.5, activeInvestment / (params.gridLevels - 1));
+            if (targetBuyUsd >= 10) {
+              const buyAmt = targetBuyUsd / emptyBuyLevelPrice;
+              usdtFree -= targetBuyUsd;
+              usdtLocked += targetBuyUsd;
+              activeOrders.push({
+                id: orderIdCounter++,
+                side: 'buy',
+                price: emptyBuyLevelPrice,
+                amount: buyAmt,
+                levelIndex: 0,
+              });
             }
           }
         }
