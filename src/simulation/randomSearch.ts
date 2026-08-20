@@ -1,6 +1,7 @@
 import { CandleBuffer } from './datasetLoader';
 import { BotHyperparameters, MemoryEngine } from './memoryEngine';
 import { SimulationMetrics } from './fitness';
+import { ParallelEvaluator } from './parallelRunner';
 
 export interface ParameterSpace {
   gridLevels: [number, number];
@@ -64,6 +65,28 @@ export class RandomSearchOptimizer {
     };
   }
 
+  public static async runParallel(
+    trainCandles: CandleBuffer,
+    iterations = 500,
+    space: ParameterSpace = DEFAULT_PARAM_SPACE,
+    investment = 10000,
+    onProgress?: (completed: number, total: number, best: CandidateEvaluation | null) => void
+  ): Promise<CandidateEvaluation[]> {
+    const candidates: BotHyperparameters[] = [];
+    for (let i = 0; i < iterations; i++) {
+      candidates.push(this.sampleParams(space, investment));
+    }
+
+    const results = await ParallelEvaluator.evaluateBatch(trainCandles, candidates, (completed, total) => {
+      if (onProgress) {
+        onProgress(completed, total, null);
+      }
+    });
+
+    results.sort((a, b) => b.metrics.fitnessScore - a.metrics.fitnessScore);
+    return results;
+  }
+
   public static run(
     trainCandles: CandleBuffer,
     iterations = 500,
@@ -89,7 +112,6 @@ export class RandomSearchOptimizer {
       }
     }
 
-    // Ordenar de mejor a peor según fitnessScore descendente
     results.sort((a, b) => b.metrics.fitnessScore - a.metrics.fitnessScore);
     return results;
   }

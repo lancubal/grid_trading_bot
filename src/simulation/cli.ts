@@ -8,14 +8,16 @@ import { MemoryEngine } from './memoryEngine';
 
 async function main() {
   const cpus = os.cpus();
+  const workerThreads = Math.max(1, cpus.length - 1);
+
   console.log('================================================================');
-  console.log('🧬 OPTIMIZADOR EVOLUTIVO DE ALTA FIDELIDAD (BTC/USDT SPOT)');
+  console.log('🧬 OPTIMIZADOR EVOLUTIVO DE ALTA VELOCIDAD & MULTI-THREADING (BTC/USDT SPOT)');
   console.log('================================================================');
-  console.log(`• Hardware Detectado: ${cpus[0]?.model || 'CPU'} (${cpus.length} cores)`);
+  console.log(`• Procesador: ${cpus[0]?.model || 'CPU'} (${cpus.length} cores / ${workerThreads} workers paralelos)`);
   console.log(`• Capital Inicial: $10,000.00 USD (Spot 50% USDT / 50% BTC)`);
-  console.log(`• Reinversión: Mensual (Compounding de beneficios al cierre de mes)`);
+  console.log(`• Reinversión: Compounding Continuo (Ganancias realizadas)`);
   console.log(`• Comisiones: 0.075% BNB Spot exacta por orden ejecutada`);
-  console.log(`• Contabilidad: Spot Estricta (Cero inventario fantasma)`);
+  console.log(`• Contabilidad: Spot 1:1 Estricta (Cero inventario fantasma)`);
 
   const datasetPath = path.resolve(__dirname, '../../datasets/btc_historical_1m.csv');
 
@@ -31,41 +33,41 @@ async function main() {
   // 1. Cargar y particionar dataset
   const dataset = await DatasetLoader.load(datasetPath, 0.70);
 
-  // 2. FASE 1: Random Search (Exploración Monte Carlo)
+  // 2. FASE 1: Random Search Multi-Thread (Exploración Global)
   console.log('----------------------------------------------------------------');
-  console.log('🔍 FASE 1: RANDOM SEARCH (Exploración Global del Espacio de Parámetros)');
+  console.log(`🔍 FASE 1: RANDOM SEARCH PARALELO (${workerThreads} Hilos Concurrente)`);
   console.log('----------------------------------------------------------------');
-  const RANDOM_ITERATIONS = 300;
+  const RANDOM_ITERATIONS = 400;
   console.log(`• Evaluando ${RANDOM_ITERATIONS} configuraciones sobre Train Set (70%)...`);
 
   const t0 = Date.now();
-  const randomResults = RandomSearchOptimizer.run(
+  const randomResults = await RandomSearchOptimizer.runParallel(
     dataset.train,
     RANDOM_ITERATIONS,
     undefined,
     INITIAL_INVESTMENT,
-    (completed, total, best) => {
+    (completed, total) => {
       process.stdout.write(
-        `\r⏳ Progreso: ${completed}/${total} (${((completed / total) * 100).toFixed(0)}%) | Mejor Fitness: ${best?.metrics.fitnessScore.toFixed(2)} (ROI: ${best?.metrics.roiPct.toFixed(1)}% | MaxDD: ${best?.metrics.maxDrawdownPct.toFixed(1)}% | Trades: ${best?.metrics.totalTrades})`
+        `\r⏳ Progreso Paralelo: ${completed}/${total} (${((completed / total) * 100).toFixed(0)}%)`
       );
     }
   );
   console.log(`\n✅ Fase 1 completada en ${((Date.now() - t0) / 1000).toFixed(2)}s.`);
   console.log(`🏆 Mejor Candidato Fase 1: Fitness ${randomResults[0].metrics.fitnessScore.toFixed(2)} | ROI ${randomResults[0].metrics.roiPct.toFixed(2)}% | Ganancia Neta: $${randomResults[0].metrics.netProfitUsd.toFixed(2)} USD\n`);
 
-  // 3. FASE 2: Algoritmo Genético (Evolución Fina)
+  // 3. FASE 2: Algoritmo Genético Multi-Thread
   console.log('----------------------------------------------------------------');
-  console.log('🧬 FASE 2: ALGORITMO GENÉTICO (Evolución, Cruce y Mutación)');
+  console.log(`🧬 FASE 2: ALGORITMO GENÉTICO PARALELO (${workerThreads} Hilos Concurrente)`);
   console.log('----------------------------------------------------------------');
-  const POPULATION_SIZE = 40;
-  const GENERATIONS = 15;
+  const POPULATION_SIZE = 60;
+  const GENERATIONS = 20;
   console.log(`• Población: ${POPULATION_SIZE} individuos | Generaciones: ${GENERATIONS}`);
   console.log(`• Sembrando Generación 0 con los mejores ${POPULATION_SIZE} candidatos de Fase 1...`);
 
   const topSeeds = randomResults.slice(0, POPULATION_SIZE).map((r) => r.params);
 
   const t1 = Date.now();
-  const geneticResults = GeneticOptimizer.run(
+  const geneticResults = await GeneticOptimizer.runParallel(
     dataset.train,
     {
       populationSize: POPULATION_SIZE,
@@ -88,10 +90,23 @@ async function main() {
   console.log(`• Evaluando los mejores 3 campeones en datos NO VISTOS (${dataset.test.length.toLocaleString()} velas de 1m)...`);
 
   const topChampions = geneticResults.champions.slice(0, 3);
+  const reportOutput: any = {
+    date: new Date().toISOString(),
+    hardware: `${cpus[0]?.model} (${cpus.length} cores)`,
+    executionTimeSeconds: (Date.now() - startTime) / 1000,
+    champions: [],
+  };
 
   topChampions.forEach((champion, idx) => {
     const testMetrics = MemoryEngine.run(dataset.test, champion.params);
     const trainMetrics = champion.metrics;
+
+    reportOutput.champions.push({
+      rank: idx + 1,
+      params: champion.params,
+      train: trainMetrics,
+      test: testMetrics,
+    });
 
     console.log(`\n----------------------------------------------------------------`);
     console.log(`👑 CAMPEÓN #${idx + 1}`);
@@ -123,8 +138,12 @@ async function main() {
     console.log(`FOMO_COOLDOWN_HOURS="${champion.params.fomoCooldownHours}"`);
   });
 
+  const reportPath = path.join(path.resolve(__dirname, '../../datasets'), 'last_optimization_report.json');
+  fs.writeFileSync(reportPath, JSON.stringify(reportOutput, null, 2), 'utf-8');
+  console.log(`\n💾 Reporte guardado automáticamente en: ${reportPath}`);
+
   console.log(`\n================================================================`);
-  console.log(`✨ OPTIMIZACIÓN FINALIZADA EN ${((Date.now() - startTime) / 1000).toFixed(2)}s`);
+  console.log(`✨ OPTIMIZACIÓN MULTI-CORE FINALIZADA EN ${((Date.now() - startTime) / 1000).toFixed(2)}s`);
   console.log(`================================================================\n`);
 }
 

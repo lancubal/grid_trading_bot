@@ -1,6 +1,7 @@
 import { CandleBuffer } from './datasetLoader';
 import { BotHyperparameters, MemoryEngine } from './memoryEngine';
 import { CandidateEvaluation, DEFAULT_PARAM_SPACE, ParameterSpace, RandomSearchOptimizer } from './randomSearch';
+import { ParallelEvaluator } from './parallelRunner';
 
 export interface GeneticOptimizerOptions {
   populationSize?: number;
@@ -56,6 +57,7 @@ export class GeneticOptimizer {
       circuitBreakerDropPct: parseFloat(this.clamp(blend(parentA.circuitBreakerDropPct, parentB.circuitBreakerDropPct), space.circuitBreakerDropPct[0], space.circuitBreakerDropPct[1]).toFixed(1)),
       circuitBreakerWindowMins: Math.round(this.clamp(blend(parentA.circuitBreakerWindowMins, parentB.circuitBreakerWindowMins), space.circuitBreakerWindowMins[0], space.circuitBreakerWindowMins[1])),
       fomoCooldownHours: parseFloat(this.clamp(blend(parentA.fomoCooldownHours, parentB.fomoCooldownHours), space.fomoCooldownHours[0], space.fomoCooldownHours[1]).toFixed(1)),
+      enableContinuousCompounding: true,
     };
   }
 
@@ -100,12 +102,12 @@ export class GeneticOptimizer {
     return best!;
   }
 
-  public static run(
+  public static async runParallel(
     trainCandles: CandleBuffer,
     options: GeneticOptimizerOptions = {},
     onGenerationProgress?: (summary: GenerationSummary) => void
-  ): { champions: CandidateEvaluation[]; history: GenerationSummary[] } {
-    const popSize = options.populationSize || 50;
+  ): Promise<{ champions: CandidateEvaluation[]; history: GenerationSummary[] }> {
+    const popSize = options.populationSize || 60;
     const maxGen = options.generations || 20;
     const tourSize = options.tournamentSize || 3;
     const crossRate = options.crossoverRate || 0.85;
@@ -114,7 +116,6 @@ export class GeneticOptimizer {
     const space = options.space || DEFAULT_PARAM_SPACE;
     const investment = options.investment || 10000;
 
-    // 1. Inicialización de la Población (Generación 0)
     let population: BotHyperparameters[] = [];
     if (options.seedPopulation && options.seedPopulation.length > 0) {
       population.push(...options.seedPopulation.slice(0, popSize));
@@ -125,15 +126,8 @@ export class GeneticOptimizer {
 
     const history: GenerationSummary[] = [];
 
-    // 2. Bucle Evolutivo
     for (let gen = 0; gen < maxGen; gen++) {
-      // Evaluar población
-      const evaluations: CandidateEvaluation[] = population.map((individual) => {
-        const metrics = MemoryEngine.run(trainCandles, individual);
-        return { params: individual, metrics };
-      });
-
-      // Ordenar por fitness descendente
+      const evaluations = await ParallelEvaluator.evaluateBatch(trainCandles, population);
       evaluations.sort((a, b) => b.metrics.fitnessScore - a.metrics.fitnessScore);
 
       const bestInd = evaluations[0];
@@ -152,18 +146,13 @@ export class GeneticOptimizer {
         onGenerationProgress(summary);
       }
 
-      // Si es la última generación, finalizar
       if (gen === maxGen - 1) break;
 
-      // 3. Crear Nueva Generación
       const newPopulation: BotHyperparameters[] = [];
-
-      // Elitismo: Preservar los mejores N individuos
       for (let e = 0; e < elitism; e++) {
         newPopulation.push(evaluations[e].params);
       }
 
-      // Reproducción, Cruce y Mutación
       while (newPopulation.length < popSize) {
         const parentA = this.tournamentSelect(evaluations, tourSize).params;
         const parentB = this.tournamentSelect(evaluations, tourSize).params;
@@ -176,7 +165,82 @@ export class GeneticOptimizer {
       population = newPopulation;
     }
 
-    // Retornar top 5 campeones
+    const finalEvaluations = await ParallelEvaluator.evaluateBatch(trainCandles, population);
+    finalEvaluations.sort((a, b) => b.metrics.fitnessScore - a.metrics.fitnessScore);
+
+    return {
+      champions: finalEvaluations.slice(0, 5),
+      history,
+    };
+  }
+
+  public static run(
+    trainCandles: CandleBuffer,
+    options: GeneticOptimizerOptions = {},
+    onGenerationProgress?: (summary: GenerationSummary) => void
+  ): { champions: CandidateEvaluation[]; history: GenerationSummary[] } {
+    const popSize = options.populationSize || 50;
+    const maxGen = options.generations || 20;
+    const tourSize = options.tournamentSize || 3;
+    const crossRate = options.crossoverRate || 0.85;
+    const mutRate = options.mutationRate || 0.20;
+    const elitism = options.elitismCount || 2;
+    const space = options.space || DEFAULT_PARAM_SPACE;
+    const investment = options.investment || 10000;
+
+    let population: BotHyperparameters[] = [];
+    if (options.seedPopulation && options.seedPopulation.length > 0) {
+      population.push(...options.seedPopulation.slice(0, popSize));
+    }
+    while (population.length < popSize) {
+      population.push(RandomSearchOptimizer.sampleParams(space, investment));
+    }
+
+    const history: GenerationSummary[] = [];
+
+    for (let gen = 0; gen < maxGen; gen++) {
+      const evaluations: CandidateEvaluation[] = population.map((individual) => {
+        const metrics = MemoryEngine.run(trainCandles, individual);
+        return { params: individual, metrics };
+      });
+
+      evaluations.sort((a, b) => b.metrics.fitnessScore - a.metrics.fitnessScore);
+
+      const bestInd = evaluations[0];
+      const sumFitness = evaluations.reduce((acc, curr) => acc + curr.metrics.fitnessScore, 0);
+      const avgFitness = sumFitness / evaluations.length;
+
+      const summary: GenerationSummary = {
+        generationIndex: gen + 1,
+        bestFitness: bestInd.metrics.fitnessScore,
+        avgFitness,
+        bestIndividual: bestInd,
+      };
+      history.push(summary);
+
+      if (onGenerationProgress) {
+        onGenerationProgress(summary);
+      }
+
+      if (gen === maxGen - 1) break;
+
+      const newPopulation: BotHyperparameters[] = [];
+      for (let e = 0; e < elitism; e++) {
+        newPopulation.push(evaluations[e].params);
+      }
+
+      while (newPopulation.length < popSize) {
+        const parentA = this.tournamentSelect(evaluations, tourSize).params;
+        const parentB = this.tournamentSelect(evaluations, tourSize).params;
+
+        let offspring = Math.random() < crossRate ? this.crossover(parentA, parentB, space) : { ...parentA };
+        offspring = this.mutate(offspring, mutRate, space);
+        newPopulation.push(offspring);
+      }
+
+      population = newPopulation;
+    }
+
     const finalEvaluations = population.map((ind) => ({
       params: ind,
       metrics: MemoryEngine.run(trainCandles, ind),
