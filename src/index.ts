@@ -15,6 +15,7 @@ import { SlackNotifier } from './core/notifier';
 import { CircuitBreaker } from './core/circuitBreaker';
 import { FomoGuard } from './core/fomoGuard';
 import { PriceDriftGuard } from './core/priceDriftGuard';
+import { AutoBnbFeeManager } from './core/autoBnbFeeManager';
 import { setupDailyReportCron } from './cron/dailyReport';
 import { OHLCV } from './backtest/backtester';
 
@@ -28,6 +29,19 @@ async function main() {
   // Módulo de Notificaciones & Observabilidad (Slack)
   const notifier = new SlackNotifier(env.ENABLE_NOTIFICATIONS, env.SLACK_WEBHOOK_URL);
   console.log(`[Observability] 📡 Slack Notifier: ${notifier.isEnabled() ? 'ACTIVADO (Babysitting activo 🟢)' : 'SILENCIADO (Kill-Switch ENABLE_NOTIFICATIONS=false 🔴)'}`);
+
+  // Módulo Autónomo de Auto-Recarga de BNB para Comisiones
+  const autoBnbFeeManager = new AutoBnbFeeManager({
+    enabled: env.ENABLE_AUTO_BNB_REFILL,
+    minThresholdUsd: env.BNB_MIN_THRESHOLD_USD,
+    refillAmountUsd: env.BNB_REFILL_AMOUNT_USD,
+    cooldownHours: env.BNB_REFILL_COOLDOWN_HOURS,
+    safetyUsdtBufferUsd: env.BNB_SAFETY_USDT_BUFFER_USD,
+    isDryRun: env.DRY_RUN,
+  });
+  console.log(
+    `[AutoBnbFeeManager] 🪙 Auto-Recarga de BNB: ${env.ENABLE_AUTO_BNB_REFILL ? `ACTIVADA (Umbral: < $${env.BNB_MIN_THRESHOLD_USD.toFixed(2)} | Recarga: $${env.BNB_REFILL_AMOUNT_USD.toFixed(2)} USD | Cooldown: ${env.BNB_REFILL_COOLDOWN_HOURS}h)` : 'DESACTIVADA 🔴'}`
+  );
 
   // Cortacircuitos de Velocidad (Circuit Breaker) Anti-Flash Crash
   const circuitBreaker = new CircuitBreaker({
@@ -592,20 +606,11 @@ async function main() {
           const usdtUsed = bal.used['USDT'] ? new Decimal(bal.used['USDT']) : new Decimal(0);
           const btcFree = bal.free['BTC'] ? new Decimal(bal.free['BTC']) : new Decimal(0);
           const btcUsed = bal.used['BTC'] ? new Decimal(bal.used['BTC']) : new Decimal(0);
-          const bnbFree = bal.free['BNB'] ? new Decimal(bal.free['BNB']) : new Decimal(0);
-
-          // Monitoreo proactivo de saldo BNB para comisiones bonificadas al 0.075%
-          if (bnbFree.lessThan(0.015)) {
-            const now = Date.now();
-            if (now - lastBnbAlertTime >= BNB_ALERT_COOLDOWN_MS) {
-              lastBnbAlertTime = now;
-              await notifier.sendSlackMessage(
-                `⚠️ *ALERTA DE COMISIONES (SALDO BNB BAJO)*\n` +
-                `• *Saldo BNB Disponible:* ${bnbFree.toFixed(4)} BNB (~$${bnbFree.times(570).toFixed(2)} USD)\n` +
-                `• *Impacto:* Si el saldo de BNB se agota, Binance cobrará la comisión estándar (0.10% en lugar de 0.075%).\n` +
-                `• *Recomendación:* Recargar ~$20–$30 USD en BNB en Binance Spot para conservar el 25% de descuento en comisiones.`
-              );
-            }
+          // Auto-Recarga Autónoma de BNB para conservar 25% de descuento en comisiones
+          try {
+            await autoBnbFeeManager.evaluateAndRefill(exchangeAdapter, notifier);
+          } catch (err: any) {
+            console.warn('[AutoBnbFeeManager Warning] Error evaluando auto-recarga de BNB:', err.message || err);
           }
 
           const totalUsdt = usdtFree.plus(usdtUsed);

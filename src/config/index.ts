@@ -84,6 +84,25 @@ export const EnvSchema = z.object({
     .optional()
     .default(''),
 
+  // Módulo Autónomo de Auto-Recarga de BNB para Comisiones
+  ENABLE_AUTO_BNB_REFILL: z
+    .string()
+    .transform((val) => val.toLowerCase() === 'true')
+    .default('true'),
+  BNB_MIN_THRESHOLD_USD: z
+    .string()
+    .transform((val) => new Decimal(val))
+    .default('25.00'),
+  BNB_REFILL_AMOUNT_USD: z
+    .string()
+    .transform((val) => new Decimal(val))
+    .default('50.00'),
+  BNB_REFILL_COOLDOWN_HOURS: z.coerce.number().default(12.0),
+  BNB_SAFETY_USDT_BUFFER_USD: z
+    .string()
+    .transform((val) => new Decimal(val))
+    .default('50.00'),
+
   // Base de Datos PostgreSQL
   DATABASE_URL: z.string().url(),
 
