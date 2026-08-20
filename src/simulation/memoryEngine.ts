@@ -22,6 +22,8 @@ export interface BotHyperparameters {
   microCapitalRatio?: number; // default: 0.35 (35% micro, 65% macro)
   microGridRangeUsd?: number; // default: 1800 (rango de micro-grilla)
   microGridLevels?: number; // default: 6 (niveles de micro-grilla)
+  enableRegimeOrchestrator?: boolean; // default: true (Control Integral PID)
+  regimeThresholdPct?: number; // default: 1.5%
 }
 
 interface SimulatedOrder {
@@ -33,10 +35,13 @@ interface SimulatedOrder {
   levelIndex: number;
 }
 
+export type MarketRegime = 'BULL' | 'CRAB' | 'BEAR';
+
 /**
- * Motor de Simulación en Memoria con Arquitectura de Doble Capa (Micro/Macro) y Spot 1:1.
- * - Capa Micro: Rango ultra-estrecho ($150-$250 step) para flujo continuo diario (15-30 trades/día).
- * - Capa Macro: Rango amplio de swing con Take-Profit Asimétrico 2.0x para capturar grandes movimientos.
+ * Motor de Simulación en Memoria con Orquestador de Régimen de Mercado en Tiempo Real (Control Integral PID).
+ * - Detección de Régimen Macro: Bull (subidas sostenidas), Crab (rango lateral), Bear (desarme).
+ * - Adaptación de Parámetros en Caliente: Take-Profit expandido en Bull, Micro-Grid agresivo en Crab, Grilla amplia en Bear.
+ * - Arquitectura de Doble Capa Concurrente (Micro/Macro).
  * - Ponderación Asimétrica de Capital y Reinyección Inmediata de Legacy.
  * - Compounding Continuo en Ganancias Realizadas.
  * - Cero ventas a pérdida (Bóveda Legacy protegida).
@@ -53,16 +58,15 @@ export class MemoryEngine {
 
     const durationDays = (candles.timestamps[totalCandles - 1] - candles.timestamps[0]) / (1000 * 60 * 60 * 24);
     const enableCompounding = params.enableContinuousCompounding !== false;
-    const takeProfitMult = params.takeProfitMultiplier || 1.0;
-    const buyCapWeight = params.buyCapitalWeight || 0.50;
     const isDualLayer = params.enableDualLayer !== false;
-    const microRatio = isDualLayer ? (params.microCapitalRatio || 0.35) : 0;
-    const macroRatio = 1.0 - microRatio;
+    const isOrchestratorActive = params.enableRegimeOrchestrator !== false;
+    const regimeThreshold = params.regimeThresholdPct || 1.5;
 
     // 1. Estado de Balances Físicos en Binance Spot
     let activeInvestment = params.investment;
     let realizedNetProfitUsd = 0;
 
+    const buyCapWeight = params.buyCapitalWeight || 0.50;
     let usdtFree = activeInvestment * buyCapWeight;
     let usdtLocked = 0;
 
@@ -88,7 +92,7 @@ export class MemoryEngine {
     let fomoBlockedUntil = 0;
     let lastDriftRebalanceTime = 0;
 
-    // Búfer para cálculo de ATR (Velas de 1h agregadas)
+    // Búfer para cálculo de ATR & EMAs de Régimen (Velas de 1h agregadas)
     const tfMins = params.atrTimeframeMinutes;
     const tfCandlesHighs: number[] = [];
     const tfCandlesLows: number[] = [];
@@ -103,25 +107,43 @@ export class MemoryEngine {
 
     let currentAtr = Math.max(300, (candles.highs[0] - candles.lows[0]) * 10);
 
+    // Estado del Orquestador de Régimen
+    let emaFast = initialPrice;
+    let emaSlow = initialPrice;
+    const alphaFast = 2 / (24 + 1); // 24h EMA
+    const alphaSlow = 2 / (96 + 1); // 96h EMA
+    let currentRegime: MarketRegime = 'CRAB';
+
     // 2. Grillas Activas (Macro + Micro)
     let currentMacroLower = initialPrice - (params.minGridRangeUsd / 2);
     let currentMacroUpper = initialPrice + (params.minGridRangeUsd / 2);
     let currentMacroStepSize = (currentMacroUpper - currentMacroLower) / (params.gridLevels - 1);
-
     let currentMicroStepSize = (params.microGridRangeUsd || 1800) / Math.max(2, (params.microGridLevels || 6) - 1);
 
     let activeOrders: SimulatedOrder[] = [];
     const legacyOrders: SimulatedOrder[] = [];
 
     /**
-     * Siembra o Rebalancea la Grilla de Doble Capa
+     * Siembra o Rebalancea la Grilla según el Régimen Activo
      */
-    const seedGridStrict = (centerPrice: number, atr: number) => {
-      const rawMacroRange = atr * params.atrMultiplier;
+    const seedGridStrict = (centerPrice: number, atr: number, regime: MarketRegime) => {
+      let rawMacroRange = atr * params.atrMultiplier;
+      if (regime === 'BEAR') {
+        rawMacroRange *= 1.20; // Expansión de rango defensivo en Bear
+      }
+
       const clampedMacroRange = Math.max(params.minGridRangeUsd, Math.min(params.maxGridRangeUsd, rawMacroRange));
       currentMacroLower = centerPrice - (clampedMacroRange / 2);
       currentMacroUpper = centerPrice + (clampedMacroRange / 2);
       currentMacroStepSize = clampedMacroRange / (params.gridLevels - 1);
+
+      let microRatio = isDualLayer ? (params.microCapitalRatio || 0.35) : 0;
+      if (isOrchestratorActive) {
+        if (regime === 'BULL') microRatio = Math.max(0.10, microRatio * 0.6); // 85-90% capital en Macro Swing
+        else if (regime === 'CRAB') microRatio = Math.min(0.45, microRatio * 1.25); // 45% capital en Micro Flips
+        else if (regime === 'BEAR') microRatio = Math.max(0.10, microRatio * 0.5); // Reducción de micro-riesgo
+      }
+      const macroRatio = 1.0 - microRatio;
 
       const microRange = Math.min(clampedMacroRange * 0.40, params.microGridRangeUsd || 1800);
       const microLevels = params.microGridLevels || 6;
@@ -129,7 +151,7 @@ export class MemoryEngine {
 
       activeOrders = [];
 
-      // A. CAPA MACRO (60-70% del capital)
+      // A. CAPA MACRO
       const macroInvest = activeInvestment * macroRatio;
       const baseMacroOrderUsd = macroInvest / (params.gridLevels - 1);
 
@@ -175,7 +197,7 @@ export class MemoryEngine {
         }
       }
 
-      // B. CAPA MICRO (30-40% del capital para micro-rotación)
+      // B. CAPA MICRO
       if (isDualLayer && microRatio > 0.05) {
         const microInvest = activeInvestment * microRatio;
         const baseMicroOrderUsd = microInvest / Math.max(2, microLevels - 1);
@@ -218,7 +240,7 @@ export class MemoryEngine {
       }
     };
 
-    seedGridStrict(initialPrice, currentAtr);
+    seedGridStrict(initialPrice, currentAtr, currentRegime);
 
     // 3. Bucle Principal de Velas de 1 minuto
     for (let t = 0; t < totalCandles; t++) {
@@ -230,7 +252,7 @@ export class MemoryEngine {
       const volume = candles.volumes[t];
       const dayIndex = Math.floor(time / (24 * 60 * 60 * 1000));
 
-      // A. Agregación de Velas Superiores para ATR
+      // A. Agregación de Velas Superiores para ATR & Orquestador de Régimen
       if (tfMinuteCount === 0) {
         currentTfOpen = open;
         currentTfHigh = high;
@@ -248,6 +270,21 @@ export class MemoryEngine {
         tfCandlesLows.push(currentTfLow);
         tfCandlesCloses.push(currentTfClose);
         tfMinuteCount = 0;
+
+        // Actualizar EMAs de Régimen
+        emaFast = (alphaFast * currentTfClose) + ((1 - alphaFast) * emaFast);
+        emaSlow = (alphaSlow * currentTfClose) + ((1 - alphaSlow) * emaSlow);
+
+        if (isOrchestratorActive && emaSlow > 0) {
+          const regimeScorePct = ((emaFast - emaSlow) / emaSlow) * 100;
+          if (regimeScorePct >= regimeThreshold) {
+            currentRegime = 'BULL';
+          } else if (regimeScorePct <= -regimeThreshold) {
+            currentRegime = 'BEAR';
+          } else {
+            currentRegime = 'CRAB';
+          }
+        }
 
         if (tfCandlesCloses.length >= 2) {
           const count = Math.min(params.atrPeriod, tfCandlesCloses.length - 1);
@@ -284,6 +321,13 @@ export class MemoryEngine {
       // D. Micro-secuencia de Fills Intra-Vela
       const isGreenCandle = close >= open;
 
+      // Cálculo del Take-Profit efectivo según Régimen
+      let effectiveTpMult = params.takeProfitMultiplier || 1.0;
+      if (isOrchestratorActive) {
+        if (currentRegime === 'BULL') effectiveTpMult = Math.max(1.8, effectiveTpMult * 1.15);
+        else if (currentRegime === 'BEAR') effectiveTpMult = 1.0;
+      }
+
       const processBuyFills = () => {
         const remainingOrders: SimulatedOrder[] = [];
         for (const ord of activeOrders) {
@@ -300,7 +344,7 @@ export class MemoryEngine {
               activeDaysSet.add(dayIndex);
 
               // El BTC comprado pasa a orden Flip SELL
-              const step = ord.layer === 'micro' ? currentMicroStepSize : (currentMacroStepSize * takeProfitMult);
+              const step = ord.layer === 'micro' ? currentMicroStepSize : (currentMacroStepSize * effectiveTpMult);
               const flipPrice = ord.price + step;
               btcLockedActive += ord.amount;
               remainingOrders.push({
@@ -335,7 +379,7 @@ export class MemoryEngine {
             totalTrades++;
             activeDaysSet.add(dayIndex);
 
-            const step = ord.layer === 'micro' ? currentMicroStepSize : (currentMacroStepSize * takeProfitMult);
+            const step = ord.layer === 'micro' ? currentMicroStepSize : (currentMacroStepSize * effectiveTpMult);
 
             // Compounding Realizado
             if (enableCompounding) {
@@ -455,8 +499,8 @@ export class MemoryEngine {
             }
           }
 
-          // 3. Re-sembrar la nueva grilla de doble capa
-          seedGridStrict(close, currentAtr);
+          // 3. Re-sembrar la nueva grilla adaptada al régimen
+          seedGridStrict(close, currentAtr, currentRegime);
         }
       }
 

@@ -20,6 +20,7 @@ export interface ParameterSpace {
   microCapitalRatio: [number, number];
   microGridRangeUsd: [number, number];
   microGridLevels: [number, number];
+  regimeThresholdPct: [number, number];
 }
 
 export const DEFAULT_PARAM_SPACE: ParameterSpace = {
@@ -39,6 +40,7 @@ export const DEFAULT_PARAM_SPACE: ParameterSpace = {
   microCapitalRatio: [0.20, 0.45],
   microGridRangeUsd: [1000, 2500],
   microGridLevels: [5, 9],
+  regimeThresholdPct: [0.8, 2.5],
 };
 
 export interface CandidateEvaluation {
@@ -78,6 +80,8 @@ export class RandomSearchOptimizer {
       microCapitalRatio: randomFloat(space.microCapitalRatio[0], space.microCapitalRatio[1], 2),
       microGridRangeUsd: randomFloat(space.microGridRangeUsd[0], space.microGridRangeUsd[1], 0),
       microGridLevels: randomInt(space.microGridLevels[0], space.microGridLevels[1]),
+      enableRegimeOrchestrator: true,
+      regimeThresholdPct: randomFloat(space.regimeThresholdPct[0], space.regimeThresholdPct[1], 2),
     };
   }
 

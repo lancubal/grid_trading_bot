@@ -64,6 +64,8 @@ export class GeneticOptimizer {
       microCapitalRatio: parseFloat(this.clamp(blend(parentA.microCapitalRatio || 0.35, parentB.microCapitalRatio || 0.35), space.microCapitalRatio[0], space.microCapitalRatio[1]).toFixed(2)),
       microGridRangeUsd: Math.round(this.clamp(blend(parentA.microGridRangeUsd || 1800, parentB.microGridRangeUsd || 1800), space.microGridRangeUsd[0], space.microGridRangeUsd[1])),
       microGridLevels: Math.round(this.clamp(pick(parentA.microGridLevels || 6, parentB.microGridLevels || 6), space.microGridLevels[0], space.microGridLevels[1])),
+      enableRegimeOrchestrator: true,
+      regimeThresholdPct: parseFloat(this.clamp(blend(parentA.regimeThresholdPct || 1.5, parentB.regimeThresholdPct || 1.5), space.regimeThresholdPct[0], space.regimeThresholdPct[1]).toFixed(2)),
     };
   }
 
@@ -97,6 +99,7 @@ export class GeneticOptimizer {
     mutated.microCapitalRatio = parseFloat(mutateGene(mutated.microCapitalRatio || 0.35, space.microCapitalRatio[0], space.microCapitalRatio[1]).toFixed(2));
     mutated.microGridRangeUsd = Math.round(mutateGene(mutated.microGridRangeUsd || 1800, space.microGridRangeUsd[0], space.microGridRangeUsd[1]));
     mutated.microGridLevels = Math.round(mutateGene(mutated.microGridLevels || 6, space.microGridLevels[0], space.microGridLevels[1]));
+    mutated.regimeThresholdPct = parseFloat(mutateGene(mutated.regimeThresholdPct || 1.5, space.regimeThresholdPct[0], space.regimeThresholdPct[1]).toFixed(2));
 
     return mutated;
   }

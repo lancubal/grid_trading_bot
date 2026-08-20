@@ -11,11 +11,11 @@ async function main() {
   const workerThreads = Math.max(1, cpus.length - 1);
 
   console.log('================================================================');
-  console.log('🧬 OPTIMIZADOR EVOLUTIVO MULTI-THREADING (ARQUITECTURA DE DOBLE CAPA)');
+  console.log('🧬 OPTIMIZADOR EVOLUTIVO: ORQUESTADOR DE RÉGIMEN & CONTROL INTEGRAL PID');
   console.log('================================================================');
   console.log(`• Procesador: ${cpus[0]?.model || 'CPU'} (${cpus.length} cores / ${workerThreads} workers paralelos)`);
   console.log(`• Capital Inicial: $10,000.00 USD (Spot 50% USDT / 50% BTC)`);
-  console.log(`• Arquitectura: Doble Capa Concurrente (Micro-Grid + Macro-Grid)`);
+  console.log(`• Arquitectura: Doble Capa + Orquestador de Régimen en Tiempo Real (Bull/Crab/Bear)`);
   console.log(`• Reinversión: Compounding Continuo + Reinyección Activa de Legacy`);
   console.log(`• Comisiones: 0.075% BNB Spot exacta por orden ejecutada`);
   console.log(`• Contabilidad: Spot 1:1 Estricta (Cero inventario fantasma)`);
@@ -143,6 +143,8 @@ async function main() {
     console.log(`MICRO_CAPITAL_RATIO="${champion.params.microCapitalRatio || 0.35}"`);
     console.log(`MICRO_GRID_RANGE_USD="${champion.params.microGridRangeUsd || 1800}.00"`);
     console.log(`MICRO_GRID_LEVELS="${champion.params.microGridLevels || 6}"`);
+    console.log(`ENABLE_REGIME_ORCHESTRATOR="true"`);
+    console.log(`REGIME_THRESHOLD_PCT="${champion.params.regimeThresholdPct || 1.5}"`);
   });
 
   const reportPath = path.join(path.resolve(__dirname, '../../datasets'), 'last_optimization_report.json');
