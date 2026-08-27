@@ -101,17 +101,21 @@ export async function calculateAccountEquity(
       });
       const bal = await exchange.fetchBalance();
 
-      btcTotal = bal.total.BTC || 0;
-      btcFree = bal.free.BTC || 0;
-      btcUsed = bal.used.BTC || 0;
+      const total = (bal.total as any) || {};
+      const free = (bal.free as any) || {};
+      const used = (bal.used as any) || {};
 
-      usdtTotal = bal.total.USDT || 0;
-      usdtFree = bal.free.USDT || 0;
-      usdtUsed = bal.used.USDT || 0;
+      btcTotal = total['BTC'] || 0;
+      btcFree = free['BTC'] || 0;
+      btcUsed = used['BTC'] || 0;
 
-      bnbTotal = bal.total.BNB || 0;
-      bnbFree = bal.free.BNB || 0;
-      bnbUsed = bal.used.BNB || 0;
+      usdtTotal = total['USDT'] || 0;
+      usdtFree = free['USDT'] || 0;
+      usdtUsed = used['USDT'] || 0;
+
+      bnbTotal = total['BNB'] || 0;
+      bnbFree = free['BNB'] || 0;
+      bnbUsed = used['BNB'] || 0;
     } catch {
       // Si falla o no tiene conexión directa al exchange, usar fallback de órdenes en BD
     }
