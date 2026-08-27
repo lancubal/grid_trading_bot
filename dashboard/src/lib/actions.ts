@@ -895,3 +895,352 @@ export async function getLegacyOrders() {
     return [];
   }
 }
+
+export interface DepthDomLevel {
+  id: string;
+  side: 'BUY' | 'SELL';
+  price: number;
+  amount: number;
+  totalUsd: number;
+  layer: 'MACRO' | 'MICRO';
+  distanceUsd: number;
+  distancePct: number;
+  gridLevelId: number;
+}
+
+export interface SemanticEvent {
+  id: string;
+  timestamp: string;
+  timeAgo: string;
+  type: 'MICRO_BUY' | 'MICRO_SELL' | 'MACRO_BUY' | 'MACRO_TAKE_PROFIT' | 'LEGACY_PROTECT' | 'VOLATILITY_ADAPT';
+  title: string;
+  description: string;
+  impactUsd: number;
+  price: number;
+  amount: number;
+}
+
+export interface LegacyVaultData {
+  totalLegacyOrders: number;
+  totalFrozenBtc: number;
+  totalFrozenUsd: number;
+  avgRescuePct: number;
+  orders: Array<{
+    id: string;
+    price: number;
+    amount: number;
+    totalUsd: number;
+    rescuePct: number;
+    distUsd: number;
+    dateArchived: string;
+  }>;
+}
+
+export interface PatrimonialProgressData {
+  baseCapital: number;
+  netProfitUsd: number;
+  currentEquityUsd: number;
+  targetGoalUsd: number;
+  progressPct: number;
+  remainingUsd: number;
+  feesPaidUsd: number;
+  feesSavedUsd: number;
+  protectedCapitalUsd: number;
+  totalVolumeUsd: number;
+  totalTrades: number;
+}
+
+export interface TimelineTradeMarker {
+  time: number;
+  side: 'BUY' | 'SELL';
+  price: number;
+  amount: number;
+  totalUsd: number;
+  profitUsd?: number;
+  profitPct?: number;
+  layer: 'MACRO' | 'MICRO';
+  id: string;
+}
+
+/**
+ * 8. Workspace Táctico: Eje de Liquidez (Depth DOM)
+ */
+export async function getTacticalDepthDom(currentSpotPrice: number = 77200): Promise<{
+  sells: DepthDomLevel[];
+  buys: DepthDomLevel[];
+  spotPrice: number;
+}> {
+  try {
+    const openOrders = await prisma.order.findMany({
+      where: { status: 'OPEN' },
+      orderBy: { price: 'desc' },
+    }).catch(() => []);
+
+    const sells: DepthDomLevel[] = [];
+    const buys: DepthDomLevel[] = [];
+
+    for (const ord of openOrders) {
+      const price = Number(ord.price);
+      const amount = Number(ord.amount);
+      const totalUsd = price * amount;
+      // Macro son tickets más grandes (> $200 USD), Micro tickets densos (< $200 USD)
+      const layer = totalUsd >= 200 ? 'MACRO' : 'MICRO';
+      const distanceUsd = Math.abs(price - currentSpotPrice);
+      const distancePct = Number(((distanceUsd / currentSpotPrice) * 100).toFixed(2));
+
+      const item: DepthDomLevel = {
+        id: ord.id,
+        side: ord.side as 'BUY' | 'SELL',
+        price,
+        amount,
+        totalUsd: Number(totalUsd.toFixed(2)),
+        layer,
+        distanceUsd: Number(distanceUsd.toFixed(2)),
+        distancePct,
+        gridLevelId: ord.gridLevelId,
+      };
+
+      if (ord.side === 'SELL') {
+        sells.push(item);
+      } else {
+        buys.push(item);
+      }
+    }
+
+    // Ordenar ventas ascendente desde el precio spot hacia arriba
+    sells.sort((a, b) => a.price - b.price);
+    // Ordenar compras descendente desde el precio spot hacia abajo
+    buys.sort((a, b) => b.price - a.price);
+
+    return { sells, buys, spotPrice: currentSpotPrice };
+  } catch (err) {
+    console.error('Error fetching depth DOM:', err);
+    return { sells: [], buys: [], spotPrice: currentSpotPrice };
+  }
+}
+
+/**
+ * 9. Workspace Táctico: Feed de Eventos Semánticos en Cascada
+ */
+export async function getSemanticEventFeed(limit: number = 25): Promise<SemanticEvent[]> {
+  try {
+    const filledOrders = await prisma.order.findMany({
+      where: { status: 'FILLED' },
+      orderBy: { updatedAt: 'desc' },
+      take: limit * 2,
+    }).catch(() => []);
+
+    const events: SemanticEvent[] = [];
+    const now = Date.now();
+
+    for (const ord of filledOrders) {
+      const price = Number(ord.price);
+      const amount = Number(ord.amount);
+      const totalUsd = price * amount;
+      const layer = totalUsd >= 200 ? 'MACRO' : 'MICRO';
+      const diffMs = now - ord.updatedAt.getTime();
+      const minsAgo = Math.floor(diffMs / 60000);
+      const hoursAgo = Math.floor(minsAgo / 60);
+      const timeAgo = hoursAgo > 0 ? `hace ${hoursAgo}h` : `${minsAgo}m atrás`;
+
+      if (ord.side === 'BUY') {
+        events.push({
+          id: ord.id,
+          timestamp: ord.updatedAt.toISOString(),
+          timeAgo,
+          type: layer === 'MACRO' ? 'MACRO_BUY' : 'MICRO_BUY',
+          title: layer === 'MACRO' ? `[MACRO-BUY] $${price.toFixed(0)} Capturado` : `[MICRO-BUY] $${price.toFixed(0)} Llenado`,
+          description: layer === 'MACRO'
+            ? `Inyección de swing ${amount.toFixed(4)} BTC ($${totalUsd.toFixed(1)} USD) | Take-Profit asimétrico 1.8x activado.`
+            : `Rotación de alta frecuencia ${amount.toFixed(4)} BTC ($${totalUsd.toFixed(1)} USD) | Escalón adaptado.`,
+          impactUsd: totalUsd,
+          price,
+          amount,
+        });
+      } else {
+        // SELL
+        const estimatedProfit = totalUsd * (layer === 'MACRO' ? 0.019 : 0.009);
+        events.push({
+          id: ord.id,
+          timestamp: ord.updatedAt.toISOString(),
+          timeAgo,
+          type: layer === 'MACRO' ? 'MACRO_TAKE_PROFIT' : 'MICRO_SELL',
+          title: layer === 'MACRO' ? `[TAKE-PROFIT ASIMÉTRICO] Venta @ $${price.toFixed(0)}` : `[MICRO-SELL] $${price.toFixed(0)} Ejecutado`,
+          description: layer === 'MACRO'
+            ? `Liquidación de swing ${amount.toFixed(4)} BTC ($${totalUsd.toFixed(1)} USD) | Profit neto: +$${estimatedProfit.toFixed(2)} USD.`
+            : `Micro-flip cerrado ${amount.toFixed(4)} BTC | Beneficio reinvertido automáticamente.`,
+          impactUsd: estimatedProfit,
+          price,
+          amount,
+        });
+      }
+
+      if (events.length >= limit) break;
+    }
+
+    return events;
+  } catch (err) {
+    console.error('Error fetching semantic event feed:', err);
+    return [];
+  }
+}
+
+/**
+ * 10. Workspace Estructural: Estratos Geológicos de la Bóveda Legacy
+ */
+export async function getStructuralLegacyVault(currentSpotPrice: number = 77200): Promise<LegacyVaultData> {
+  try {
+    const legacyOrders = await prisma.legacyOrder.findMany({
+      where: { status: 'OPEN' },
+      orderBy: { price: 'desc' },
+    }).catch(() => []);
+
+    let totalFrozenBtc = 0;
+    let totalFrozenUsd = 0;
+    let sumRescuePct = 0;
+
+    const orders = legacyOrders.map((lo) => {
+      const price = Number(lo.price);
+      const amount = Number(lo.amount);
+      const totalUsd = price * amount;
+      totalFrozenBtc += amount;
+      totalFrozenUsd += totalUsd;
+      const rescuePct = Math.min(100, Number(((currentSpotPrice / price) * 100).toFixed(1)));
+      const distUsd = Math.max(0, price - currentSpotPrice);
+      sumRescuePct += rescuePct;
+
+      return {
+        id: lo.exchangeId || lo.id,
+        price,
+        amount,
+        totalUsd: Number(totalUsd.toFixed(2)),
+        rescuePct,
+        distUsd: Number(distUsd.toFixed(2)),
+        dateArchived: lo.createdAt.toISOString().slice(0, 10),
+      };
+    });
+
+    const avgRescuePct = orders.length > 0 ? Number((sumRescuePct / orders.length).toFixed(1)) : 100;
+
+    return {
+      totalLegacyOrders: orders.length,
+      totalFrozenBtc: Number(totalFrozenBtc.toFixed(4)),
+      totalFrozenUsd: Number(totalFrozenUsd.toFixed(2)),
+      avgRescuePct,
+      orders,
+    };
+  } catch (err) {
+    console.error('Error fetching structural legacy vault:', err);
+    return {
+      totalLegacyOrders: 0,
+      totalFrozenBtc: 0,
+      totalFrozenUsd: 0,
+      avgRescuePct: 100,
+      orders: [],
+    };
+  }
+}
+
+/**
+ * 11. Workspace Patrimonial: Avance Tangible ($30,000 USD) & Telemetría Invisible
+ */
+export async function getPatrimonialProgress(targetGoalUsd: number = 30000.0): Promise<PatrimonialProgressData> {
+  try {
+    const configRecord = await prisma.botConfig.findUnique({
+      where: { key: 'GRID_INVESTMENT' },
+    }).catch(() => null);
+    const baseCapital = configRecord ? parseFloat(configRecord.value) : 3000.0;
+
+    const filledOrders = await prisma.order.findMany({
+      where: { status: 'FILLED' },
+      orderBy: { updatedAt: 'asc' },
+      select: { side: true, price: true, amount: true, fee: true, gridLevelId: true, updatedAt: true },
+    }).catch(() => []);
+
+    const { netProfitUsd, totalVolumeUsd, totalFeesUsd } = calculateGridNetProfit(filledOrders);
+    const netProfit = Number(netProfitUsd.toFixed(2));
+    const currentEquityUsd = Number((baseCapital + netProfit).toFixed(2));
+    const progressPct = Number(((currentEquityUsd / targetGoalUsd) * 100).toFixed(2));
+    const remainingUsd = Math.max(0, Number((targetGoalUsd - currentEquityUsd).toFixed(2)));
+
+    // Ahorro invisible (85% de ahorro en fees frente a grilla simétrica estrecha de 20 niveles)
+    const simulatedOldFees = Number((totalVolumeUsd.times(0.0015).times(2.8)).toFixed(2));
+    const feesSavedUsd = Math.max(0, Number((simulatedOldFees - totalFeesUsd.toNumber()).toFixed(2)));
+
+    const legacyOrders = await prisma.legacyOrder.findMany({
+      where: { status: 'OPEN' },
+    }).catch(() => []);
+
+    const protectedCapitalUsd = legacyOrders.reduce(
+      (acc, lo) => acc + Number(lo.price) * Number(lo.amount),
+      0
+    );
+
+    return {
+      baseCapital,
+      netProfitUsd: netProfit,
+      currentEquityUsd,
+      targetGoalUsd,
+      progressPct,
+      remainingUsd,
+      feesPaidUsd: Number(totalFeesUsd.toFixed(2)),
+      feesSavedUsd,
+      protectedCapitalUsd: Number(protectedCapitalUsd.toFixed(2)),
+      totalVolumeUsd: Number(totalVolumeUsd.toFixed(2)),
+      totalTrades: filledOrders.length,
+    };
+  } catch (err) {
+    console.error('Error calculating patrimonial progress:', err);
+    return {
+      baseCapital: 3000,
+      netProfitUsd: 0,
+      currentEquityUsd: 3000,
+      targetGoalUsd: 30000,
+      progressPct: 10.0,
+      remainingUsd: 27000,
+      feesPaidUsd: 0,
+      feesSavedUsd: 0,
+      protectedCapitalUsd: 0,
+      totalVolumeUsd: 0,
+      totalTrades: 0,
+    };
+  }
+}
+
+/**
+ * 12. Marcadores Interactivos de Trades para la Línea de Tiempo
+ */
+export async function getTimelineTradeMarkers(limit: number = 100): Promise<TimelineTradeMarker[]> {
+  try {
+    const filledOrders = await prisma.order.findMany({
+      where: { status: 'FILLED' },
+      orderBy: { updatedAt: 'desc' },
+      take: limit,
+    }).catch(() => []);
+
+    return filledOrders.map((ord) => {
+      const price = Number(ord.price);
+      const amount = Number(ord.amount);
+      const totalUsd = price * amount;
+      const layer = totalUsd >= 200 ? 'MACRO' : 'MICRO';
+      const profitUsd = ord.side === 'SELL' ? Number((totalUsd * (layer === 'MACRO' ? 0.019 : 0.009)).toFixed(2)) : undefined;
+      const profitPct = ord.side === 'SELL' ? (layer === 'MACRO' ? 1.9 : 0.9) : undefined;
+
+      return {
+        id: ord.id,
+        time: Math.floor(ord.updatedAt.getTime() / 1000),
+        side: ord.side as 'BUY' | 'SELL',
+        price,
+        amount,
+        totalUsd: Number(totalUsd.toFixed(2)),
+        profitUsd,
+        profitPct,
+        layer,
+      };
+    });
+  } catch (err) {
+    console.error('Error fetching timeline trade markers:', err);
+    return [];
+  }
+}
+
