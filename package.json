@@ -13,6 +13,7 @@
     "optimize": "tsx src/simulation/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "telemetry": "tsx src/cli/telemetry.ts",
     "db:migrate": "npx prisma migrate dev",
     "db:generate": "npx prisma generate",
     "db:studio": "npx prisma studio"
