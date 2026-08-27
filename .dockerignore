@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.env
+datasets
+docs
+dashboard
+brain
+scratch
+*.csv
+*.zip
+*.md
+*.log
