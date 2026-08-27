@@ -619,25 +619,32 @@ async function main() {
 
           const currentConfiguredInvestment = gridManager.getConfig().investment;
 
-          // Si el saldo total físico disponible aumentó un 15% o más respecto al capital configurado
-          if (currentTotalPhysicalEquity.greaterThan(currentConfiguredInvestment.times(1.15))) {
+          // Si el saldo total físico disponible aumentó un 10% o más respecto al capital configurado
+          if (currentTotalPhysicalEquity.greaterThan(currentConfiguredInvestment.times(1.10))) {
+            const injectedDelta = currentTotalPhysicalEquity.minus(currentConfiguredInvestment);
             console.log(
-              `\n[Capital Deposit Detector] 💰 ¡NUEVO CAPITAL DETECTADO EN BINANCE SPOT! Saldo físico total: $${currentTotalPhysicalEquity.toFixed(2)} USD > Capital Grilla anterior: $${currentConfiguredInvestment.toFixed(2)} USD.`
+              `\n[Capital Deposit Detector] 💰 ¡NUEVA INYECCIÓN DETECTADA EN BINANCE SPOT! +$${injectedDelta.toFixed(2)} USD (Saldo total: $${currentTotalPhysicalEquity.toFixed(2)} USD > Anterior: $${currentConfiguredInvestment.toFixed(2)} USD).`
             );
             console.log(`[Capital Deposit Detector] 🔄 Escalando inversión de la grilla a $${currentTotalPhysicalEquity.toFixed(2)} USD y rebalanceando grilla activa...`);
 
             gridManager.updateInvestment(currentTotalPhysicalEquity);
             await repository.setBotConfig('GRID_INVESTMENT', currentTotalPhysicalEquity.toFixed(2));
-            await repository.setBotConfig('LIFETIME_ALLOCATION_USD', currentTotalPhysicalEquity.toFixed(2));
+            
+            // Incrementar la inyección base histórica acumulada de forma aditiva
+            const prevInjectedStr = await repository.getBotConfig('LIFETIME_ALLOCATION_USD');
+            const prevInjected = prevInjectedStr ? new Decimal(prevInjectedStr) : new Decimal(4160.00);
+            const newTotalInjected = prevInjected.plus(injectedDelta);
+            await repository.setBotConfig('LIFETIME_ALLOCATION_USD', newTotalInjected.toFixed(2));
 
             const currentAtr = volatilityEngine.getCurrentAtr() || initialAtr;
             await performGridRebalance(currentAtr, ticker.last, false);
 
             await notifier.sendSlackMessage(
-              `💰 *NUEVO CAPITAL DETECTADO Y ASIGNADO A LA GRILLA*\n` +
+              `💰 *NUEVA INYECCIÓN DETECTADA Y ASIGNADA A LA GRILLA*\n` +
+              `• *Capital Inyectado Adicional:* +$${injectedDelta.toFixed(2)} USD\n` +
               `• *Nuevo Patrimonio Total:* $${currentTotalPhysicalEquity.toFixed(2)} USD\n` +
+              `• *Inyección Base Total:* $${newTotalInjected.toFixed(2)} USD\n` +
               `• *USDT Disponible:* $${usdtFree.toFixed(2)} USDT | *BTC Disponible:* ${btcFree.toFixed(6)} BTC\n` +
-              `• *Nuevo Tamaño por Orden:* ~$${currentTotalPhysicalEquity.dividedBy(gridManager.getConfig().gridLevels - 1).toFixed(2)} USD por nivel\n` +
               `• *Grilla Activa:* Re-sembrada y ajustada con el nuevo capital ampliado 🚀`
             );
           }

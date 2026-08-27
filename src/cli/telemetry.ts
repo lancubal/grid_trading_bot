@@ -1,11 +1,12 @@
 import { PrismaClient } from '@prisma/client';
 import Decimal from 'decimal.js';
-import https from 'https';
+import { calculateAccountEquity, EquitySummary } from '../core/equityCalculator';
 
 const prisma = new PrismaClient();
 
-// ANSI Color Helpers
+// ANSI Color & Style Helpers
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
+const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
@@ -13,332 +14,228 @@ const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
 const blue = (s: string) => `\x1b[34m${s}\x1b[0m`;
 const magenta = (s: string) => `\x1b[35m${s}\x1b[0m`;
 const gray = (s: string) => `\x1b[90m${s}\x1b[0m`;
-const bgGreen = (s: string) => `\x1b[42m\x1b[30m${s}\x1b[0m`;
-const bgBlue = (s: string) => `\x1b[44m\x1b[37m${s}\x1b[0m`;
 
-function fetchBinancePrice(): Promise<number> {
-  return new Promise((resolve) => {
-    https
-      .get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT', (res) => {
-        let data = '';
-        res.on('data', (chunk) => (data += chunk));
-        res.on('end', () => {
-          try {
-            const parsed = JSON.parse(data);
-            resolve(parseFloat(parsed.price) || 77200);
-          } catch {
-            resolve(77200);
-          }
-        });
-      })
-      .on('error', () => resolve(77200));
-  });
+function stripAnsi(str: string): string {
+  return str.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
-function renderProgressBar(
-  baseVal: number,
-  profitVal: number,
-  targetVal: number,
-  width: number = 36
-): { bar: string; pct: number } {
-  const currentTotal = Math.max(0, baseVal + profitVal);
-  const totalRatio = Math.min(1, currentTotal / targetVal);
-  const baseRatio = Math.min(1, baseVal / targetVal);
-  const profitRatio = Math.max(0, Math.min(1 - baseRatio, profitVal / targetVal));
+const BOX_WIDTH = 78;
 
-  const baseChars = Math.round(baseRatio * width);
-  const profitChars = Math.round(profitRatio * width);
-  const emptyChars = Math.max(0, width - baseChars - profitChars);
-
-  const bar = `${blue('█'.repeat(baseChars))}${green('█'.repeat(profitChars))}${gray('░'.repeat(emptyChars))}`;
-  const pct = (currentTotal / targetVal) * 100;
-  return { bar, pct };
+function printLine(content: string = '') {
+  const visible = stripAnsi(content);
+  const padding = Math.max(0, BOX_WIDTH - visible.length);
+  console.log(gray('│ ') + content + ' '.repeat(padding) + gray(' │'));
 }
 
-export async function runTelemetry(isWatch: boolean = false) {
+function printSeparator() {
+  console.log(gray('├' + '─'.repeat(BOX_WIDTH + 2) + '┤'));
+}
+
+function renderBar(filledChars: number, totalChars: number, filledColorFn: (s: string) => string): string {
+  const filled = Math.max(0, Math.min(totalChars, Math.round(filledChars)));
+  const empty = Math.max(0, totalChars - filled);
+  return `${filledColorFn('█'.repeat(filled))}${gray('░'.repeat(empty))}`;
+}
+
+type PeriodFilter = 'today' | 'week' | 'month' | 'year' | 'all';
+
+function parsePeriodFilter(args: string[]): { filter: PeriodFilter; label: string; sinceDate?: Date } {
+  const now = new Date();
+  if (args.includes('--today') || args.includes('-d')) {
+    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
+    return { filter: 'today', label: 'HOY (00:00 UTC a ahora)', sinceDate: today };
+  }
+  if (args.includes('--week') || args.includes('-w')) {
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 3600 * 1000);
+    return { filter: 'week', label: 'ÚLTIMOS 7 DÍAS', sinceDate: weekAgo };
+  }
+  if (args.includes('--month') || args.includes('-m')) {
+    const monthAgo = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
+    return { filter: 'month', label: 'ÚLTIMOS 30 DÍAS', sinceDate: monthAgo };
+  }
+  if (args.includes('--year') || args.includes('-y')) {
+    const yearStart = new Date(Date.UTC(now.getUTCFullYear(), 0, 1, 0, 0, 0));
+    return { filter: 'year', label: `AÑO ${now.getUTCFullYear()}`, sinceDate: yearStart };
+  }
+  return { filter: 'all', label: 'HISTÓRICO COMPLETO' };
+}
+
+export async function runTelemetry(isWatch: boolean = false, args: string[] = []) {
   try {
-    const spotPrice = await fetchBinancePrice();
+    const { label: periodLabel, sinceDate } = parsePeriodFilter(args);
 
-    // 1. Bot Configuration
-    const configRecords = await prisma.botConfig.findMany().catch(() => []);
-    const configMap = new Map(configRecords.map((r) => [r.key, r.value]));
-    const initialInvestment = parseFloat(configMap.get('GRID_INVESTMENT') || '3000.00');
-    const targetGoalUsd = 30000.0;
+    // 1. Cálculo Unificado de Patrimonio Mark-to-Market
+    const eq: EquitySummary = await calculateAccountEquity(prisma, sinceDate);
 
-    // 2. Orders Queries
-    const openOrders = await prisma.order
-      .findMany({
-        where: { status: 'OPEN' },
-        orderBy: { price: 'desc' },
-      })
-      .catch(() => []);
+    // 2. Órdenes Abiertas (Depth DOM)
+    const openOrders = await prisma.order.findMany({
+      where: { status: 'OPEN' },
+      orderBy: { price: 'desc' },
+    }).catch(() => []);
 
-    const filledOrders = await prisma.order
-      .findMany({
-        where: { status: 'FILLED' },
-        orderBy: { updatedAt: 'asc' },
-      })
-      .catch(() => []);
-
-    const legacyOrders = await prisma.legacyOrder
-      .findMany({
-        orderBy: { price: 'desc' },
-      })
-      .catch(() => []);
-
-    // 3. Profit & Savings Math (FIFO)
-    let totalBuyVol = 0;
-    let totalSellVol = 0;
-    let totalFeesPaid = 0;
-    let grossRealizedProfit = 0;
-    const inventory: { price: number; amount: number }[] = [];
-
-    for (const f of filledOrders) {
-      const price = Number(f.price);
-      const amount = Number(f.amount);
-      const notional = price * amount;
-      const fee = f.fee ? Number(f.fee) : notional * 0.00075;
-      totalFeesPaid += fee;
-
-      if (f.side === 'BUY') {
-        totalBuyVol += notional;
-        inventory.push({ price, amount });
-      } else {
-        totalSellVol += notional;
-        let remainingSell = amount;
-        while (remainingSell > 0.0000001 && inventory.length > 0) {
-          const oldestBuy = inventory[0];
-          const matchAmt = Math.min(remainingSell, oldestBuy.amount);
-          grossRealizedProfit += (price - oldestBuy.price) * matchAmt;
-          oldestBuy.amount -= matchAmt;
-          remainingSell -= matchAmt;
-          if (oldestBuy.amount <= 0.0000001) inventory.shift();
-        }
-      }
-    }
-
-    const netRealizedProfit = grossRealizedProfit - totalFeesPaid;
-    const totalVolume = totalBuyVol + totalSellVol;
-
-    // Estimación del Ahorro Invisible (85% de ahorro en comisiones frente al modelo viejo de 20 niveles)
-    // El modelo viejo cobraba ~0.15% ida y vuelta sobre un volumen 7.5x superior por día
-    const simulatedOldFees = (totalVolume * 0.0015 * 3.2);
-    const estimatedFeesSaved = Math.max(0, simulatedOldFees - totalFeesPaid);
-
-    // 4. Categorize Open Orders (Macro vs Micro)
-    // En la configuración actual: Micro son niveles con step ~$448, Macro son step ~$874
-    const openSells = openOrders.filter((o) => o.side === 'SELL');
     const openBuys = openOrders.filter((o) => o.side === 'BUY');
+    const openSells = openOrders.filter((o) => o.side === 'SELL');
 
-    const totalOpenBuyUsd = openBuys.reduce((acc, o) => acc + Number(o.price) * Number(o.amount), 0);
-    const totalOpenSellBtc = openSells.reduce((acc, o) => acc + Number(o.amount), 0);
-    const totalOpenSellUsd = openSells.reduce((acc, o) => acc + Number(o.price) * Number(o.amount), 0);
+    // 3. Fills del período
+    const filledWhere: any = { status: 'FILLED' };
+    if (sinceDate) {
+      filledWhere.updatedAt = { gte: sinceDate };
+    }
+    const filledOrders = await prisma.order.findMany({
+      where: filledWhere,
+      select: { price: true, amount: true, fee: true },
+    }).catch(() => []);
 
-    // Legacy Vault Math
-    let legacyTotalBtc = 0;
-    let legacyTotalUsd = 0;
-    const legacyDetails = legacyOrders.map((lo) => {
+    const totalPeriodVolume = filledOrders.reduce(
+      (acc, f) => acc + Number(f.price) * Number(f.amount),
+      0
+    );
+    const totalFeesPaid = filledOrders.reduce(
+      (acc, f) => acc + (f.fee ? Number(f.fee) : Number(f.price) * Number(f.amount) * 0.00075),
+      0
+    );
+    const estimatedFeesSaved = Math.max(0, totalPeriodVolume * 0.0015 * 2.8 - totalFeesPaid);
+
+    // 4. Bóveda Legacy
+    const legacyOrders = await prisma.legacyOrder.findMany({
+      where: { status: 'OPEN' },
+      orderBy: { price: 'desc' },
+    }).catch(() => []);
+
+    const legacyList = legacyOrders.map((lo) => {
       const p = Number(lo.price);
       const amt = Number(lo.amount);
-      legacyTotalBtc += amt;
-      legacyTotalUsd += p * amt;
-      const rescuePct = ((spotPrice / p) * 100);
-      const distUsd = p - spotPrice;
-      return { price: p, amount: amt, rescuePct, distUsd, id: lo.exchangeId || lo.id };
+      const rescuePct = Math.min(100, Number(((eq.spotBtcPrice / p) * 100).toFixed(1)));
+      const distUsd = Math.max(0, p - eq.spotBtcPrice);
+      return { price: p, amount: amt, rescuePct, distUsd };
     });
 
-    const currentTotalEquity = initialInvestment + netRealizedProfit;
-    const { bar: progressBar, pct: progressPct } = renderProgressBar(
-      initialInvestment,
-      netRealizedProfit,
-      targetGoalUsd
-    );
+    // Barras de Progreso
+    const goalBar = renderBar((eq.progressTowardsGoalPct / 100) * 30, 30, blue);
+    const compBar = renderBar(Math.min(30, Math.max(1, (eq.compoundingRunRatePct / 10) * 30)), 30, green);
 
-    // Proximidad Macro
-    const closestMacroSell = openSells[openSells.length - 1];
-    const closestMacroBuy = openBuys[0];
+    // Proximidades Macro
+    const nextMacroSell = openSells[openSells.length - 1];
+    const nextMacroBuy = openBuys[0];
+    const distToSell = nextMacroSell ? Number(nextMacroSell.price) - eq.spotBtcPrice : 850;
+    const distToBuy = nextMacroBuy ? eq.spotBtcPrice - Number(nextMacroBuy.price) : 850;
 
-    const distToSell = closestMacroSell ? Number(closestMacroSell.price) - spotPrice : 0;
-    const distToBuy = closestMacroBuy ? spotPrice - Number(closestMacroBuy.price) : 0;
-
-    // Output formatting
     const nowStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 
     if (isWatch) {
-      process.stdout.write('\x1b[2J\x1b[0;0H'); // Clear console for live watch
+      process.stdout.write('\x1b[2J\x1b[0;0H');
     }
 
-    console.log(gray('┌' + '─'.repeat(78) + '┐'));
-    console.log(
-      gray('│ ') +
-        bold(cyan('🛸 TERMINAL DE TELEMETRÍA CUANTITATIVA — BTC/USDT SPOT')) +
-        ' '.repeat(16) +
-        gray(nowStr) +
-        gray(' │')
-    );
-    console.log(gray('├' + '─'.repeat(78) + '┤'));
+    // RENDERIZADO DEL CUADRO
+    console.log(gray('┌' + '─'.repeat(BOX_WIDTH + 2) + '┐'));
+    printLine(bold(cyan('🛸 TERMINAL DE TELEMETRÍA CUANTITATIVA — BTC/USDT')) + '  ' + gray(nowStr));
+    printSeparator();
 
-    // SECCIÓN 1: KPI & PATRIMONIAL
-    console.log(
-      gray('│ ') +
-        bold('PRECIO SPOT: ') +
-        yellow(`$${spotPrice.toLocaleString('en-US', { minimumFractionDigits: 2 })} USD`) +
-        '  │  ' +
-        bold('CAPITAL ACTIVO: ') +
-        green(`$${currentTotalEquity.toFixed(2)} USD`) +
-        '  │  ' +
-        bold('PROFIT NETO: ') +
-        (netRealizedProfit >= 0 ? green(`+$${netRealizedProfit.toFixed(2)} USD`) : red(`-$${Math.abs(netRealizedProfit).toFixed(2)} USD`)) +
-        ' '.repeat(Math.max(1, 10 - netRealizedProfit.toFixed(2).length)) +
-        gray('│')
+    // FILA 1: BALANCE EXACTO DE BINANCE Y RENDIMIENTOS
+    printLine(
+      `🪙 ${bold('SPOT BTC:')} ${yellow('$' + eq.spotBtcPrice.toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' USD')} │ 💰 ${bold('TOTAL EN BINANCE:')} ${green('$' + eq.totalEquityUsd.toLocaleString('en-US', { minimumFractionDigits: 2 }))}`
     );
+    printLine(
+      `📥 ${bold('INYECCIÓN BASE:')} ${blue('$' + eq.injectedBaseCapital.toFixed(2) + ' USD')} │ 📈 ${bold('PROFIT BOT:')} ${eq.netRealizedTradingProfit >= 0 ? green('+$' + eq.netRealizedTradingProfit.toFixed(2)) : red('-$' + Math.abs(eq.netRealizedTradingProfit).toFixed(2))} │ 🚀 ${bold('HODL BTC:')} ${green('+$' + eq.unrealizedFloatingProfit.toFixed(2))}`
+    );
+    printLine(
+      `📅 ${bold('FILTRO:')} ${cyan('[' + periodLabel + ']')} │ 📊 ${bold('VOLUMEN:')} $${totalPeriodVolume.toFixed(0)} USD │ 🔢 ${bold('TRADES:')} ${filledOrders.length}`
+    );
+    printSeparator();
 
-    console.log(gray('├' + '─'.repeat(78) + '┤'));
-    console.log(
-      gray('│ ') +
-        bold(magenta('🏡 OBJETIVO PATRIMONIAL ($30,000 USD — HACIA EL LADRILLO):')) +
-        ' '.repeat(20) +
-        gray('│')
+    // FILA 2: DESGLOSE DE BILLETERA SPOT
+    printLine(bold(cyan('💼 DESGLOSE SPOT EN BINANCE (VALORIZADO MARK-TO-MARKET):')));
+    printLine(
+      `  • ${bold('Bitcoin (BTC):')} ${eq.btcBalance.total.toFixed(5)} BTC (${bold('$' + eq.btcBalance.valueUsd.toFixed(2) + ' USD')}) ${gray('[Free: ' + eq.btcBalance.free.toFixed(5) + ' | Used: ' + eq.btcBalance.used.toFixed(5) + ']')}`
     );
-    console.log(
-      gray('│ ') +
-        `[${progressBar}] ` +
-        bold(cyan(`${progressPct.toFixed(2)}%`)) +
-        ` (${green('$' + currentTotalEquity.toFixed(0))} / $${targetGoalUsd.toLocaleString()} USD)` +
-        ' '.repeat(Math.max(1, 13 - currentTotalEquity.toFixed(0).length)) +
-        gray('│')
+    printLine(
+      `  • ${bold('Dólares (USDT):')} ${bold('$' + eq.usdtBalance.total.toFixed(2) + ' USD')} ${gray('[Free: $' + eq.usdtBalance.free.toFixed(2) + ' | En Órdenes: $' + eq.usdtBalance.used.toFixed(2) + ']')}`
     );
-    console.log(
-      gray('│ ') +
-        gray(`   Leyenda: ${blue('■ Base Inicial ($3k)')} | ${green('■ Profit Reinvertido (Compounding)')} | ${gray('░ Brecha')}`) +
-        ' '.repeat(12) +
-        gray('│')
+    printLine(
+      `  • ${bold('Comisiones (BNB):')} ${eq.bnbBalance.total.toFixed(4)} BNB (${bold('$' + eq.bnbBalance.valueUsd.toFixed(2) + ' USD')}) ${green('✓ 25% Descuento Activo')}`
     );
+    printSeparator();
 
-    // SECCIÓN 2: WORKSPACE TÁCTICO (EJE DE LIQUIDEZ DEPTH DOM)
-    console.log(gray('├' + '─'.repeat(78) + '┤'));
-    console.log(
-      gray('│ ') +
-        bold(yellow('⚡ EJE DE LIQUIDEZ TÁCTICO (DEPTH DOM EN VIVO)')) +
-        ' '.repeat(34) +
-        gray('│')
+    // SECCIÓN 3: OBJETIVO PATRIMONIAL & COMPOUNDING ZOOM
+    printLine(bold(magenta('🏡 OBJETIVO PATRIMONIAL ($30,000 USD — HACIA EL LADRILLO):')));
+    printLine(
+      `[${goalBar}] ${bold(cyan(eq.progressTowardsGoalPct.toFixed(2) + '%'))} ($${eq.totalEquityUsd.toFixed(0)} / $${eq.targetGoalUsd.toLocaleString()} USD)`
     );
+    printLine(
+      `   ${blue('• Capital Inyectado: $' + eq.injectedBaseCapital.toFixed(2))} │ ${green('• Retorno Total: +' + eq.totalAccountReturnUsd.toFixed(2) + ' (+' + eq.totalAccountReturnPct.toFixed(2) + '%)')} │ ${dim('• Faltante: $' + eq.remainingTowardsGoalUsd.toFixed(0) + ' USD')}`
+    );
+    printLine('');
+    printLine(bold(green('🚀 CRECIMIENTO DE CAPITAL REINVERTIDO (COMPOUNDING ZOOM):')));
+    printLine(
+      `[${compBar}] ${bold(green((eq.compoundingRunRatePct >= 0 ? '+' : '') + eq.compoundingRunRatePct.toFixed(2) + '%'))} ganancia limpia de flips (${eq.netRealizedTradingProfit >= 0 ? '+' : ''}$${eq.netRealizedTradingProfit.toFixed(2)} USD)`
+    );
+    printSeparator();
 
-    // Mostrar hasta 3 órdenes de venta superiores
+    // SECCIÓN 4: EJE DE LIQUIDEZ DEPTH DOM
+    printLine(bold(yellow('⚡ EJE DE LIQUIDEZ TÁCTICO (DEPTH DOM EN VIVO)')));
+    
+    // Top 3 ventas
     const topSells = openSells.slice(-3);
     for (const s of topSells) {
       const p = Number(s.price);
       const amt = Number(s.amount);
       const valUsd = p * amt;
-      const diff = p - spotPrice;
-      console.log(
-        gray('│ ') +
-          red(`  ▲ VENTA LÍMITE `) +
-          bold(`$${p.toFixed(2)}`) +
-          `  (${amt.toFixed(4)} BTC = $${valUsd.toFixed(1)} USD)` +
-          gray(` [+$${diff.toFixed(0)} | +${((diff / spotPrice) * 100).toFixed(2)}%]`) +
-          ' '.repeat(Math.max(1, 16 - diff.toFixed(0).length)) +
-          gray('│')
+      const diff = p - eq.spotBtcPrice;
+      printLine(
+        `  ${red('▲ VENTA LÍMITE')} ${bold('$' + p.toFixed(2))} (${amt.toFixed(4)} BTC = $${valUsd.toFixed(1)}) ${gray('[+$' + diff.toFixed(0) + ' | +' + ((diff / eq.spotBtcPrice) * 100).toFixed(2) + '%]')}`
       );
     }
 
-    // Punto Central SPOT
-    console.log(
-      gray('│ ') +
-        bgBlue(bold(`  ══════► SPOT ACTUAL: $${spotPrice.toFixed(2)} USD ◄══════  `)) +
-        ' '.repeat(22) +
-        gray('│')
+    // SPOT CENTRAL CON ALTO CONTRASTE
+    printLine(
+      cyan('  ──────────────► ') + bold(yellow('SPOT ACTUAL: $' + eq.spotBtcPrice.toFixed(2) + ' USD')) + cyan(' ◄──────────────')
     );
 
-    // Mostrar hasta 3 órdenes de compra inferiores
+    // Top 3 compras
     const topBuys = openBuys.slice(0, 3);
     for (const b of topBuys) {
       const p = Number(b.price);
       const amt = Number(b.amount);
       const valUsd = p * amt;
-      const diff = spotPrice - p;
-      console.log(
-        gray('│ ') +
-          green(`  ▼ COMPRA LÍMITE `) +
-          bold(`$${p.toFixed(2)}`) +
-          ` (${amt.toFixed(4)} BTC = $${valUsd.toFixed(1)} USD)` +
-          gray(` [-$${diff.toFixed(0)} | -${((diff / spotPrice) * 100).toFixed(2)}%]`) +
-          ' '.repeat(Math.max(1, 16 - diff.toFixed(0).length)) +
-          gray('│')
+      const diff = eq.spotBtcPrice - p;
+      printLine(
+        `  ${green('▼ COMPRA LÍMITE')} ${bold('$' + p.toFixed(2))} (${amt.toFixed(4)} BTC = $${valUsd.toFixed(1)}) ${gray('[-$' + diff.toFixed(0) + ' | -' + ((diff / eq.spotBtcPrice) * 100).toFixed(2) + '%]')}`
       );
     }
 
-    // SECCIÓN 3: ESTRUCTURAL & BÓVEDA LEGACY
-    console.log(gray('├' + '─'.repeat(78) + '┤'));
-    console.log(
-      gray('│ ') +
-        bold(blue('🏛️ ESTRATO BÓVEDA LEGACY & RADAR MACRO (75%)')) +
-        ' '.repeat(34) +
-        gray('│')
-    );
+    printSeparator();
 
-    if (legacyDetails.length === 0) {
-      console.log(
-        gray('│ ') +
-          green('  ✓ Bóveda Vacía:') +
-          ' Todo el capital está 100% activo en la grilla dinámica.' +
-          ' '.repeat(16) +
-          gray('│')
-      );
+    // SECCIÓN 5: ESTRATO BÓVEDA LEGACY & RADAR MACRO
+    printLine(bold(blue('🏛️ ESTRATO BÓVEDA LEGACY & RADAR MACRO (75%)')));
+    if (legacyList.length === 0) {
+      printLine(`  ${green('✓ Bóveda Despejada:')} 100% del capital activo en la grilla dinámica.`);
     } else {
-      for (const leg of legacyDetails.slice(0, 3)) {
-        const barWidth = 16;
-        const fillChars = Math.min(barWidth, Math.round((leg.rescuePct / 100) * barWidth));
-        const empty = Math.max(0, barWidth - fillChars);
-        const bar = `${yellow('█'.repeat(fillChars))}${gray('░'.repeat(empty))}`;
-
-        console.log(
-          gray('│ ') +
-            `  🏛️ Target $${leg.price.toFixed(0)} ` +
-            `[${bar}] ` +
-            bold(`${leg.rescuePct.toFixed(1)}%`) +
-            gray(` (Faltan $${leg.distUsd.toFixed(0)} USD)`) +
-            ` | ${leg.amount.toFixed(4)} BTC` +
-            ' '.repeat(Math.max(1, 12 - leg.distUsd.toFixed(0).length)) +
-            gray('│')
+      for (const leg of legacyList.slice(0, 2)) {
+        const bar = renderBar((leg.rescuePct / 100) * 16, 16, yellow);
+        printLine(
+          `  🏛️ Target $${leg.price.toFixed(0)} [${bar}] ${bold(leg.rescuePct.toFixed(1) + '%')} ${gray('(Faltan +$' + leg.distUsd.toFixed(0) + ' USD)')}`
         );
       }
     }
-
-    console.log(
-      gray('│ ') +
-        `  📡 Radar Macro: Próxima Compra: ${green('-$' + distToBuy.toFixed(0) + ' USD')} | Próxima Venta: ${red('+$' + distToSell.toFixed(0) + ' USD')}` +
-        ' '.repeat(Math.max(1, 15 - distToBuy.toFixed(0).length - distToSell.toFixed(0).length)) +
-        gray('│')
+    printLine(
+      `  📡 ${bold('Radar Macro:')} Próxima Compra: ${green('-$' + distToBuy.toFixed(0) + ' USD')} │ Próxima Venta: ${red('+$' + distToSell.toFixed(0) + ' USD')}`
     );
 
-    // SECCIÓN 4: EFICIENCIA INVISIBLE
-    console.log(gray('├' + '─'.repeat(78) + '┤'));
-    console.log(
-      gray('│ ') +
-        bold(green('✨ EFICIENCIA CUANTITATIVA INVISIBLE (SHADOW TELEMETRY):')) +
-        ' '.repeat(21) +
-        gray('│')
+    printSeparator();
+
+    // SECCIÓN 6: EFICIENCIA INVISIBLE
+    printLine(bold(green('✨ EFICIENCIA CUANTITATIVA INVISIBLE (SHADOW TELEMETRY):')));
+    printLine(
+      `  • Comisiones Pagadas:         ${yellow('-$' + totalFeesPaid.toFixed(2) + ' USD')} (Tarifa reducida 0.075% BNB)`
     );
-    console.log(
-      gray('│ ') +
-        `  • Comisiones Reales Pagadas:     ${yellow('-$' + totalFeesPaid.toFixed(2) + ' USD')} (0.075% BNB)` +
-        ' '.repeat(27) +
-        gray('│')
+    printLine(
+      `  • Comisiones Ahorradas (85%): ${green('+$' + estimatedFeesSaved.toFixed(2) + ' USD')} (Dinero conservado vs modelo viejo)`
     );
-    console.log(
-      gray('│ ') +
-        `  • Comisiones Ahorradas (85%):    ${green('+$' + estimatedFeesSaved.toFixed(2) + ' USD')} (Dinero conservado)` +
-        ' '.repeat(22) +
-        gray('│')
+    printLine(
+      `  • Capital Inyectado Base:     ${cyan('$' + eq.injectedBaseCapital.toFixed(2) + ' USD')} (Auditado)`
     );
-    console.log(
-      gray('│ ') +
-        `  • Total Fills Completados:       ${cyan(filledOrders.length.toString())} Trades (${totalBuyVol > 0 ? (totalVolume).toFixed(0) : '0'} USD Volumen)` +
-        ' '.repeat(Math.max(1, 26 - filledOrders.length.toString().length)) +
-        gray('│')
-    );
-    console.log(gray('└' + '─'.repeat(78) + '┘\n'));
+
+    console.log(gray('└' + '─'.repeat(BOX_WIDTH + 2) + '┘\n'));
   } catch (err) {
     console.error('Error ejecutando telemetría:', err);
   } finally {
@@ -350,12 +247,13 @@ export async function runTelemetry(isWatch: boolean = false) {
 
 // Ejecución directa si se invoca por CLI
 if (require.main === module) {
-  const isWatch = process.argv.includes('--watch') || process.argv.includes('-w');
+  const args = process.argv.slice(2);
+  const isWatch = args.includes('--watch') || args.includes('-l');
   if (isWatch) {
     console.log('Iniciando modo Live Watch (Ctrl+C para salir)...');
-    runTelemetry(true);
-    setInterval(() => runTelemetry(true), 3000);
+    runTelemetry(true, args);
+    setInterval(() => runTelemetry(true, args), 3000);
   } else {
-    runTelemetry(false);
+    runTelemetry(false, args);
   }
 }

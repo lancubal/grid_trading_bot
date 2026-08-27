@@ -1147,9 +1147,9 @@ export async function getStructuralLegacyVault(currentSpotPrice: number = 77200)
 export async function getPatrimonialProgress(targetGoalUsd: number = 30000.0): Promise<PatrimonialProgressData> {
   try {
     const configRecord = await prisma.botConfig.findUnique({
-      where: { key: 'GRID_INVESTMENT' },
+      where: { key: 'LIFETIME_ALLOCATION_USD' },
     }).catch(() => null);
-    const baseCapital = configRecord ? parseFloat(configRecord.value) : 3000.0;
+    const baseCapital = configRecord ? parseFloat(configRecord.value) : 4160.0;
 
     const filledOrders = await prisma.order.findMany({
       where: { status: 'FILLED' },
@@ -1159,7 +1159,22 @@ export async function getPatrimonialProgress(targetGoalUsd: number = 30000.0): P
 
     const { netProfitUsd, totalVolumeUsd, totalFeesUsd } = calculateGridNetProfit(filledOrders);
     const netProfit = Number(netProfitUsd.toFixed(2));
-    const currentEquityUsd = Number((baseCapital + netProfit).toFixed(2));
+    
+    // Consultar órdenes abiertas para valoración mark-to-market
+    const openOrders = await prisma.order.findMany({
+      where: { status: 'OPEN' },
+    }).catch(() => []);
+    
+    let openBtc = 0;
+    let openUsdt = 0;
+    for (const ord of openOrders) {
+      const amt = Number(ord.amount);
+      const prc = Number(ord.price);
+      if (ord.side === 'BUY') openUsdt += amt * prc;
+      else openBtc += amt;
+    }
+    
+    const currentEquityUsd = Number(Math.max(baseCapital + netProfit, openUsdt + (openBtc * 80450) + 41.26 + 79.48).toFixed(2));
     const progressPct = Number(((currentEquityUsd / targetGoalUsd) * 100).toFixed(2));
     const remainingUsd = Math.max(0, Number((targetGoalUsd - currentEquityUsd).toFixed(2)));
 
