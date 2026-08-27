@@ -15,26 +15,28 @@ const blue = (s: string) => `\x1b[34m${s}\x1b[0m`;
 const magenta = (s: string) => `\x1b[35m${s}\x1b[0m`;
 const gray = (s: string) => `\x1b[90m${s}\x1b[0m`;
 
-function stripAnsi(str: string): string {
-  return str.replace(/\x1b\[[0-9;]*m/g, '');
+const SEPARATOR = gray('─'.repeat(82));
+
+function renderMultiSegmentBar(
+  injectedRatio: number,
+  profitRatio: number,
+  totalChars: number = 42
+): string {
+  const injectedChars = Math.max(0, Math.round(injectedRatio * totalChars));
+  const profitChars = Math.max(0, Math.round(profitRatio * totalChars));
+  const emptyChars = Math.max(0, totalChars - injectedChars - profitChars);
+
+  return (
+    blue('█'.repeat(injectedChars)) +
+    green('█'.repeat(profitChars)) +
+    gray('░'.repeat(emptyChars))
+  );
 }
 
-const BOX_WIDTH = 78;
-
-function printLine(content: string = '') {
-  const visible = stripAnsi(content);
-  const padding = Math.max(0, BOX_WIDTH - visible.length);
-  console.log(gray('│ ') + content + ' '.repeat(padding) + gray(' │'));
-}
-
-function printSeparator() {
-  console.log(gray('├' + '─'.repeat(BOX_WIDTH + 2) + '┤'));
-}
-
-function renderBar(filledChars: number, totalChars: number, filledColorFn: (s: string) => string): string {
-  const filled = Math.max(0, Math.min(totalChars, Math.round(filledChars)));
+function renderSimpleBar(ratio: number, totalChars: number, colorFn: (s: string) => string): string {
+  const filled = Math.max(0, Math.min(totalChars, Math.round(ratio * totalChars)));
   const empty = Math.max(0, totalChars - filled);
-  return `${filledColorFn('█'.repeat(filled))}${gray('░'.repeat(empty))}`;
+  return `${colorFn('█'.repeat(filled))}${gray('░'.repeat(empty))}`;
 }
 
 type PeriodFilter = 'today' | 'week' | 'month' | 'year' | 'all';
@@ -90,11 +92,6 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
       (acc, f) => acc + Number(f.price) * Number(f.amount),
       0
     );
-    const totalFeesPaid = filledOrders.reduce(
-      (acc, f) => acc + (f.fee ? Number(f.fee) : Number(f.price) * Number(f.amount) * 0.00075),
-      0
-    );
-    const estimatedFeesSaved = Math.max(0, totalPeriodVolume * 0.0015 * 2.8 - totalFeesPaid);
 
     // 4. Bóveda Legacy
     const legacyOrders = await prisma.legacyOrder.findMany({
@@ -110,9 +107,10 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
       return { price: p, amount: amt, rescuePct, distUsd };
     });
 
-    // Barras de Progreso
-    const goalBar = renderBar((eq.progressTowardsGoalPct / 100) * 30, 30, blue);
-    const compBar = renderBar(Math.min(30, Math.max(1, (eq.compoundingRunRatePct / 10) * 30)), 30, green);
+    // Barra de Progreso Multi-Segmentada al Objetivo $30k
+    const injectedRatio = eq.injectedBaseCapital / eq.targetGoalUsd;
+    const profitRatio = Math.max(0, eq.netRealizedTradingProfit / eq.targetGoalUsd);
+    const goalBar = renderMultiSegmentBar(injectedRatio, profitRatio, 44);
 
     // Proximidades Macro
     const nextMacroSell = openSells[openSells.length - 1];
@@ -126,53 +124,48 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
       process.stdout.write('\x1b[2J\x1b[0;0H');
     }
 
-    // RENDERIZADO DEL CUADRO
-    console.log(gray('┌' + '─'.repeat(BOX_WIDTH + 2) + '┐'));
-    printLine(bold(cyan('🛸 TERMINAL DE TELEMETRÍA CUANTITATIVA — BTC/USDT')) + '  ' + gray(nowStr));
-    printSeparator();
+    // RENDERIZADO MINIMALISTA SIN CAJA LATERAL
+    console.log();
+    console.log(`${bold(cyan('🛸 TELEMETRÍA CUANTITATIVA — BTC/USDT SPOT'))}               ${gray(nowStr)}`);
+    console.log(SEPARATOR);
 
-    // FILA 1: BALANCE EXACTO DE BINANCE Y RENDIMIENTOS
-    printLine(
-      `🪙 ${bold('SPOT BTC:')} ${yellow('$' + eq.spotBtcPrice.toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' USD')} │ 💰 ${bold('TOTAL EN BINANCE:')} ${green('$' + eq.totalEquityUsd.toLocaleString('en-US', { minimumFractionDigits: 2 }))}`
+    // SECCIÓN 1: KPIS PRINCIPALES
+    console.log(
+      `🪙 ${bold('SPOT BTC:')} ${yellow('$' + eq.spotBtcPrice.toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' USD')}  │  💰 ${bold('TOTAL EN BINANCE:')} ${green('$' + eq.totalEquityUsd.toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' USD')}`
     );
-    printLine(
-      `📥 ${bold('INYECCIÓN BASE:')} ${blue('$' + eq.injectedBaseCapital.toFixed(2) + ' USD')} │ 📈 ${bold('PROFIT BOT:')} ${eq.netRealizedTradingProfit >= 0 ? green('+$' + eq.netRealizedTradingProfit.toFixed(2)) : red('-$' + Math.abs(eq.netRealizedTradingProfit).toFixed(2))} │ 🚀 ${bold('HODL BTC:')} ${green('+$' + eq.unrealizedFloatingProfit.toFixed(2))}`
+    console.log(
+      `📥 ${bold('INYECCIÓN BASE:')} ${blue('$' + eq.injectedBaseCapital.toFixed(2) + ' USD')}  │  📈 ${bold('PROFIT BOT:')} ${eq.netRealizedTradingProfit >= 0 ? green('+$' + eq.netRealizedTradingProfit.toFixed(2)) : red('-$' + Math.abs(eq.netRealizedTradingProfit).toFixed(2))}  │  🚀 ${bold('HODL BTC:')} ${green('+$' + eq.unrealizedFloatingProfit.toFixed(2) + ' USD')}`
     );
-    printLine(
-      `📅 ${bold('FILTRO:')} ${cyan('[' + periodLabel + ']')} │ 📊 ${bold('VOLUMEN:')} $${totalPeriodVolume.toFixed(0)} USD │ 🔢 ${bold('TRADES:')} ${filledOrders.length}`
+    console.log(
+      `📅 ${bold('FILTRO:')} ${cyan('[' + periodLabel + ']')}   │  📊 ${bold('VOLUMEN:')} $${totalPeriodVolume.toFixed(0)} USD  │  🔢 ${bold('TRADES:')} ${filledOrders.length}`
     );
-    printSeparator();
+    console.log(SEPARATOR);
 
-    // FILA 2: DESGLOSE DE BILLETERA SPOT
-    printLine(bold(cyan('💼 DESGLOSE SPOT EN BINANCE (VALORIZADO MARK-TO-MARKET):')));
-    printLine(
-      `  • ${bold('Bitcoin (BTC):')} ${eq.btcBalance.total.toFixed(5)} BTC (${bold('$' + eq.btcBalance.valueUsd.toFixed(2) + ' USD')}) ${gray('[Free: ' + eq.btcBalance.free.toFixed(5) + ' | Used: ' + eq.btcBalance.used.toFixed(5) + ']')}`
+    // SECCIÓN 2: DESGLOSE DE SALDOS EN SPOT
+    console.log(bold(cyan('💼 DESGLOSE SPOT EN BINANCE (VALORIZADO MARK-TO-MARKET):')));
+    console.log(
+      `  • ${bold('Bitcoin (BTC):')}  ${eq.btcBalance.total.toFixed(5)} BTC (${bold('$' + eq.btcBalance.valueUsd.toFixed(2) + ' USD')}) ${gray('[Free: ' + eq.btcBalance.free.toFixed(5) + ' | En Órdenes: ' + eq.btcBalance.used.toFixed(5) + ']')}`
     );
-    printLine(
+    console.log(
       `  • ${bold('Dólares (USDT):')} ${bold('$' + eq.usdtBalance.total.toFixed(2) + ' USD')} ${gray('[Free: $' + eq.usdtBalance.free.toFixed(2) + ' | En Órdenes: $' + eq.usdtBalance.used.toFixed(2) + ']')}`
     );
-    printLine(
-      `  • ${bold('Comisiones (BNB):')} ${eq.bnbBalance.total.toFixed(4)} BNB (${bold('$' + eq.bnbBalance.valueUsd.toFixed(2) + ' USD')}) ${green('✓ 25% Descuento Activo')}`
+    console.log(
+      `  • ${bold('Comisiones BNB:')} ${eq.bnbBalance.total.toFixed(4)} BNB (${bold('$' + eq.bnbBalance.valueUsd.toFixed(2) + ' USD')}) ${green('✓ 25% Descuento Activo')}`
     );
-    printSeparator();
+    console.log(SEPARATOR);
 
-    // SECCIÓN 3: OBJETIVO PATRIMONIAL & COMPOUNDING ZOOM
-    printLine(bold(magenta('🏡 OBJETIVO PATRIMONIAL ($30,000 USD — HACIA EL LADRILLO):')));
-    printLine(
+    // SECCIÓN 3: ÚNICO OBJETIVO PATRIMONIAL ($30,000 USD)
+    console.log(bold(magenta('🏡 OBJETIVO PATRIMONIAL ($30,000 USD — HACIA EL LADRILLO):')));
+    console.log(
       `[${goalBar}] ${bold(cyan(eq.progressTowardsGoalPct.toFixed(2) + '%'))} ($${eq.totalEquityUsd.toFixed(0)} / $${eq.targetGoalUsd.toLocaleString()} USD)`
     );
-    printLine(
-      `   ${blue('• Capital Inyectado: $' + eq.injectedBaseCapital.toFixed(2))} │ ${green('• Retorno Total: +' + eq.totalAccountReturnUsd.toFixed(2) + ' (+' + eq.totalAccountReturnPct.toFixed(2) + '%)')} │ ${dim('• Faltante: $' + eq.remainingTowardsGoalUsd.toFixed(0) + ' USD')}`
+    console.log(
+      `  ${dim('Leyenda:')} ${blue('■ Inyección Base ($' + eq.injectedBaseCapital.toFixed(0) + ')')} │ ${green('■ Profit Bot (+$' + eq.netRealizedTradingProfit.toFixed(0) + ')')} │ ${gray('░ Brecha ($' + eq.remainingTowardsGoalUsd.toFixed(0) + ' USD)')}`
     );
-    printLine('');
-    printLine(bold(green('🚀 CRECIMIENTO DE CAPITAL REINVERTIDO (COMPOUNDING ZOOM):')));
-    printLine(
-      `[${compBar}] ${bold(green((eq.compoundingRunRatePct >= 0 ? '+' : '') + eq.compoundingRunRatePct.toFixed(2) + '%'))} ganancia limpia de flips (${eq.netRealizedTradingProfit >= 0 ? '+' : ''}$${eq.netRealizedTradingProfit.toFixed(2)} USD)`
-    );
-    printSeparator();
+    console.log(SEPARATOR);
 
     // SECCIÓN 4: EJE DE LIQUIDEZ DEPTH DOM
-    printLine(bold(yellow('⚡ EJE DE LIQUIDEZ TÁCTICO (DEPTH DOM EN VIVO)')));
+    console.log(bold(yellow('⚡ EJE DE LIQUIDEZ TÁCTICO (DEPTH DOM EN VIVO)')));
     
     // Top 3 ventas
     const topSells = openSells.slice(-3);
@@ -181,13 +174,13 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
       const amt = Number(s.amount);
       const valUsd = p * amt;
       const diff = p - eq.spotBtcPrice;
-      printLine(
-        `  ${red('▲ VENTA LÍMITE')} ${bold('$' + p.toFixed(2))} (${amt.toFixed(4)} BTC = $${valUsd.toFixed(1)}) ${gray('[+$' + diff.toFixed(0) + ' | +' + ((diff / eq.spotBtcPrice) * 100).toFixed(2) + '%]')}`
+      console.log(
+        `  ${red('▲ VENTA LÍMITE')} ${bold('$' + p.toFixed(2))} (${amt.toFixed(4)} BTC = $${valUsd.toFixed(1)} USD) ${gray('[+$' + diff.toFixed(0) + ' | +' + ((diff / eq.spotBtcPrice) * 100).toFixed(2) + '%]')}`
       );
     }
 
-    // SPOT CENTRAL CON ALTO CONTRASTE
-    printLine(
+    // SPOT CENTRAL LIMPIO
+    console.log(
       cyan('  ──────────────► ') + bold(yellow('SPOT ACTUAL: $' + eq.spotBtcPrice.toFixed(2) + ' USD')) + cyan(' ◄──────────────')
     );
 
@@ -198,44 +191,30 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
       const amt = Number(b.amount);
       const valUsd = p * amt;
       const diff = eq.spotBtcPrice - p;
-      printLine(
-        `  ${green('▼ COMPRA LÍMITE')} ${bold('$' + p.toFixed(2))} (${amt.toFixed(4)} BTC = $${valUsd.toFixed(1)}) ${gray('[-$' + diff.toFixed(0) + ' | -' + ((diff / eq.spotBtcPrice) * 100).toFixed(2) + '%]')}`
+      console.log(
+        `  ${green('▼ COMPRA LÍMITE')} ${bold('$' + p.toFixed(2))} (${amt.toFixed(4)} BTC = $${valUsd.toFixed(1)} USD) ${gray('[-$' + diff.toFixed(0) + ' | -' + ((diff / eq.spotBtcPrice) * 100).toFixed(2) + '%]')}`
       );
     }
 
-    printSeparator();
+    console.log(SEPARATOR);
 
     // SECCIÓN 5: ESTRATO BÓVEDA LEGACY & RADAR MACRO
-    printLine(bold(blue('🏛️ ESTRATO BÓVEDA LEGACY & RADAR MACRO (75%)')));
+    console.log(bold(blue('🏛️ ESTRATO BÓVEDA LEGACY & RADAR MACRO (75%)')));
     if (legacyList.length === 0) {
-      printLine(`  ${green('✓ Bóveda Despejada:')} 100% del capital activo en la grilla dinámica.`);
+      console.log(`  ${green('✓ Bóveda Despejada:')} 100% del capital activo en la grilla dinámica.`);
     } else {
       for (const leg of legacyList.slice(0, 2)) {
-        const bar = renderBar((leg.rescuePct / 100) * 16, 16, yellow);
-        printLine(
+        const bar = renderSimpleBar(leg.rescuePct / 100, 16, yellow);
+        console.log(
           `  🏛️ Target $${leg.price.toFixed(0)} [${bar}] ${bold(leg.rescuePct.toFixed(1) + '%')} ${gray('(Faltan +$' + leg.distUsd.toFixed(0) + ' USD)')}`
         );
       }
     }
-    printLine(
+    console.log(
       `  📡 ${bold('Radar Macro:')} Próxima Compra: ${green('-$' + distToBuy.toFixed(0) + ' USD')} │ Próxima Venta: ${red('+$' + distToSell.toFixed(0) + ' USD')}`
     );
-
-    printSeparator();
-
-    // SECCIÓN 6: EFICIENCIA INVISIBLE
-    printLine(bold(green('✨ EFICIENCIA CUANTITATIVA INVISIBLE (SHADOW TELEMETRY):')));
-    printLine(
-      `  • Comisiones Pagadas:         ${yellow('-$' + totalFeesPaid.toFixed(2) + ' USD')} (Tarifa reducida 0.075% BNB)`
-    );
-    printLine(
-      `  • Comisiones Ahorradas (85%): ${green('+$' + estimatedFeesSaved.toFixed(2) + ' USD')} (Dinero conservado vs modelo viejo)`
-    );
-    printLine(
-      `  • Capital Inyectado Base:     ${cyan('$' + eq.injectedBaseCapital.toFixed(2) + ' USD')} (Auditado)`
-    );
-
-    console.log(gray('└' + '─'.repeat(BOX_WIDTH + 2) + '┘\n'));
+    console.log(SEPARATOR);
+    console.log();
   } catch (err) {
     console.error('Error ejecutando telemetría:', err);
   } finally {
