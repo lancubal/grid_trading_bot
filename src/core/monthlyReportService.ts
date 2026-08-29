@@ -1,0 +1,219 @@
+import { PrismaClient } from '@prisma/client';
+import Decimal from 'decimal.js';
+
+export interface MonthlySummaryData {
+  month: number;
+  year: number;
+  monthName: string;
+  startingCapital: number;
+  injectedCapital: number;
+  closingCapital: number;
+  netProfitUsd: number;
+  roiPercent: number;
+  totalTrades: number;
+  totalVolumeUsd: number;
+  totalFeesUsd: number;
+  isClosed: boolean;
+}
+
+const MONTH_NAMES = [
+  'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+];
+
+/**
+ * Calcula la ganancia neta realizada (FIFO matching de fills) dentro de un rango de fechas.
+ */
+export function calculateRangeProfit(fills: Array<{ side: string; price: any; amount: any; fee?: any }>): {
+  netProfitUsd: number;
+  totalVolumeUsd: number;
+  totalFeesUsd: number;
+} {
+  let buyVol = 0;
+  let sellVol = 0;
+  let feesPaid = 0;
+  let grossRealized = 0;
+  const inventory: { price: number; amount: number }[] = [];
+
+  for (const f of fills) {
+    const price = Number(f.price);
+    const amount = Number(f.amount);
+    const notional = price * amount;
+    const fee = f.fee ? Number(f.fee) : notional * 0.00075;
+    feesPaid += fee;
+
+    if (f.side === 'BUY') {
+      buyVol += notional;
+      inventory.push({ price, amount });
+    } else {
+      sellVol += notional;
+      let remainingSell = amount;
+      while (remainingSell > 0.0000001 && inventory.length > 0) {
+        const oldestBuy = inventory[0];
+        const matchAmt = Math.min(remainingSell, oldestBuy.amount);
+        grossRealized += (price - oldestBuy.price) * matchAmt;
+        oldestBuy.amount -= matchAmt;
+        remainingSell -= matchAmt;
+        if (oldestBuy.amount <= 0.0000001) inventory.shift();
+      }
+    }
+  }
+
+  const netProfitUsd = Number((grossRealized - feesPaid).toFixed(2));
+  const totalVolumeUsd = Number((buyVol + sellVol).toFixed(2));
+  const totalFeesUsd = Number(feesPaid.toFixed(2));
+
+  return { netProfitUsd, totalVolumeUsd, totalFeesUsd };
+}
+
+/**
+ * Sincroniza y persiste los reportes mensuales en la base de datos PostgreSQL.
+ * Cierra automáticamente meses pasados y mantiene actualizado el mes en curso.
+ */
+export async function syncAndFetchMonthlyReports(
+  prisma: PrismaClient,
+  currentInjectedCapital: number = 4160.0
+): Promise<{
+  currentMonth: MonthlySummaryData;
+  previousMonth: MonthlySummaryData | null;
+  allReports: MonthlySummaryData[];
+  diffUsd: number;
+  diffPct: number;
+}> {
+  const now = new Date();
+  const curYear = now.getUTCFullYear();
+  const curMonth = now.getUTCMonth() + 1; // 1-12
+
+  // 1. Obtener todas las órdenes ejecutadas
+  const allFills = await prisma.order.findMany({
+    where: { status: 'FILLED' },
+    orderBy: { updatedAt: 'asc' },
+    select: { side: true, price: true, amount: true, fee: true, updatedAt: true },
+  }).catch(() => []);
+
+  // Encontrar meses con actividad
+  const activeMonthKeys = new Set<string>();
+  for (const f of allFills) {
+    const y = f.updatedAt.getUTCFullYear();
+    const m = f.updatedAt.getUTCMonth() + 1;
+    activeMonthKeys.add(`${y}-${m}`);
+  }
+  // Asegurar que el mes actual esté presente
+  activeMonthKeys.add(`${curYear}-${curMonth}`);
+
+  const sortedMonthKeys = Array.from(activeMonthKeys).sort((a, b) => {
+    const [y1, m1] = a.split('-').map(Number);
+    const [y2, m2] = b.split('-').map(Number);
+    return y1 === y2 ? m1 - m2 : y1 - y2;
+  });
+
+  const reports: MonthlySummaryData[] = [];
+  let runningStartingCapital = Math.min(2160.0, currentInjectedCapital);
+
+  for (const key of sortedMonthKeys) {
+    const [y, m] = key.split('-').map(Number);
+    const monthStart = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0));
+    const monthEnd = new Date(Date.UTC(y, m, 1, 0, 0, 0));
+    const isCurrent = y === curYear && m === curMonth;
+
+    // Fills de este mes específico
+    const monthFills = allFills.filter((f) => f.updatedAt >= monthStart && f.updatedAt < monthEnd);
+    const { netProfitUsd, totalVolumeUsd, totalFeesUsd } = calculateRangeProfit(monthFills);
+
+    const monthName = MONTH_NAMES[m - 1] || `Mes ${m}`;
+    const startingCapital = Number(runningStartingCapital.toFixed(2));
+    const injectedThisMonth = isCurrent ? Math.max(0, currentInjectedCapital - startingCapital) : 0;
+    const baseOperating = startingCapital + injectedThisMonth;
+    const roiPercent = baseOperating > 0 ? Number(((netProfitUsd / baseOperating) * 100).toFixed(2)) : 0;
+    const closingCapital = Number((baseOperating + netProfitUsd).toFixed(2));
+
+    // Guardar o actualizar en la tabla MonthlyReport de PostgreSQL
+    try {
+      await prisma.monthlyReport.upsert({
+        where: {
+          year_month: { year: y, month: m },
+        },
+        update: {
+          monthName,
+          startingCapital: new Decimal(startingCapital),
+          injectedCapital: new Decimal(injectedThisMonth),
+          closingCapital: new Decimal(closingCapital),
+          netProfitUsd: new Decimal(netProfitUsd),
+          roiPercent: new Decimal(roiPercent),
+          totalTrades: monthFills.length,
+          totalVolumeUsd: new Decimal(totalVolumeUsd),
+          totalFeesUsd: new Decimal(totalFeesUsd),
+          isClosed: !isCurrent,
+        },
+        create: {
+          year: y,
+          month: m,
+          monthName,
+          startingCapital: new Decimal(startingCapital),
+          injectedCapital: new Decimal(injectedThisMonth),
+          closingCapital: new Decimal(closingCapital),
+          netProfitUsd: new Decimal(netProfitUsd),
+          roiPercent: new Decimal(roiPercent),
+          totalTrades: monthFills.length,
+          totalVolumeUsd: new Decimal(totalVolumeUsd),
+          totalFeesUsd: new Decimal(totalFeesUsd),
+          isClosed: !isCurrent,
+        },
+      });
+    } catch {
+      // Ignorar si la tabla aún está migrándose
+    }
+
+    reports.push({
+      year: y,
+      month: m,
+      monthName,
+      startingCapital,
+      injectedCapital: injectedThisMonth,
+      closingCapital,
+      netProfitUsd,
+      roiPercent,
+      totalTrades: monthFills.length,
+      totalVolumeUsd,
+      totalFeesUsd,
+      isClosed: !isCurrent,
+    });
+
+    runningStartingCapital = closingCapital;
+  }
+
+  const currentMonthReport = reports.find((r) => r.year === curYear && r.month === curMonth) || {
+    year: curYear,
+    month: curMonth,
+    monthName: MONTH_NAMES[curMonth - 1],
+    startingCapital: currentInjectedCapital,
+    injectedCapital: 0,
+    closingCapital: currentInjectedCapital,
+    netProfitUsd: 0,
+    roiPercent: 0,
+    totalTrades: 0,
+    totalVolumeUsd: 0,
+    totalFeesUsd: 0,
+    isClosed: false,
+  };
+
+  const prevMonthIdx = curMonth === 1 ? 12 : curMonth - 1;
+  const prevYear = curMonth === 1 ? curYear - 1 : curYear;
+  const previousMonthReport = reports.find((r) => r.year === prevYear && r.month === prevMonthIdx) || null;
+
+  const diffUsd = previousMonthReport
+    ? Number((currentMonthReport.netProfitUsd - previousMonthReport.netProfitUsd).toFixed(2))
+    : 0;
+
+  const diffPct = previousMonthReport && previousMonthReport.netProfitUsd > 0
+    ? Number(((diffUsd / previousMonthReport.netProfitUsd) * 100).toFixed(2))
+    : 0;
+
+  return {
+    currentMonth: currentMonthReport,
+    previousMonth: previousMonthReport,
+    allReports: reports,
+    diffUsd,
+    diffPct,
+  };
+}

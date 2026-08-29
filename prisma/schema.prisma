@@ -67,3 +67,24 @@ model LegacyOrder {
   createdAt           DateTime    @default(now())
   updatedAt           DateTime    @updatedAt
 }
+
+model MonthlyReport {
+  id               String   @id @default(uuid())
+  year             Int
+  month            Int
+  monthName        String
+  startingCapital  Decimal  @db.Decimal(18, 8)
+  injectedCapital  Decimal  @default(0) @db.Decimal(18, 8)
+  closingCapital   Decimal  @db.Decimal(18, 8)
+  netProfitUsd     Decimal  @db.Decimal(18, 8)
+  roiPercent       Decimal  @db.Decimal(8, 4)
+  totalTrades      Int
+  totalVolumeUsd   Decimal  @db.Decimal(18, 8)
+  totalFeesUsd     Decimal  @db.Decimal(18, 8)
+  isClosed         Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([year, month])
+}
+

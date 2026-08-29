@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import Decimal from 'decimal.js';
 import { calculateAccountEquity, EquitySummary } from '../core/equityCalculator';
+import { syncAndFetchMonthlyReports } from '../core/monthlyReportService';
 
 const prisma = new PrismaClient();
 
@@ -62,104 +63,6 @@ function parsePeriodFilter(args: string[]): { filter: PeriodFilter; label: strin
   return { filter: 'all', label: 'HISTÓRICO COMPLETO' };
 }
 
-interface MonthPerformance {
-  monthName: string;
-  year: number;
-  netProfitUsd: number;
-  roiPct: number;
-  totalTrades: number;
-  totalVolumeUsd: number;
-}
-
-async function calculateMonthlyPerformance(
-  prismaClient: PrismaClient,
-  baseCapital: number
-): Promise<{ currentMonth: MonthPerformance; previousMonth: MonthPerformance; diffUsd: number; diffPct: number }> {
-  const now = new Date();
-  const curYear = now.getUTCFullYear();
-  const curMonthIdx = now.getUTCMonth();
-
-  const prevMonthIdx = curMonthIdx === 0 ? 11 : curMonthIdx - 1;
-  const prevYear = curMonthIdx === 0 ? curYear - 1 : curYear;
-
-  const monthNames = [
-    'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
-    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
-  ];
-
-  async function getStatsForRange(start: Date, end: Date, name: string, yr: number): Promise<MonthPerformance> {
-    const fills = await prismaClient.order.findMany({
-      where: {
-        status: 'FILLED',
-        updatedAt: { gte: start, lt: end },
-      },
-      orderBy: { updatedAt: 'asc' },
-      select: { side: true, price: true, amount: true, fee: true },
-    }).catch(() => []);
-
-    let buyVol = 0;
-    let sellVol = 0;
-    let feesPaid = 0;
-    let grossRealized = 0;
-    const inventory: { price: number; amount: number }[] = [];
-
-    for (const f of fills) {
-      const price = Number(f.price);
-      const amount = Number(f.amount);
-      const notional = price * amount;
-      const fee = f.fee ? Number(f.fee) : notional * 0.00075;
-      feesPaid += fee;
-
-      if (f.side === 'BUY') {
-        buyVol += notional;
-        inventory.push({ price, amount });
-      } else {
-        sellVol += notional;
-        let remainingSell = amount;
-        while (remainingSell > 0.0000001 && inventory.length > 0) {
-          const oldestBuy = inventory[0];
-          const matchAmt = Math.min(remainingSell, oldestBuy.amount);
-          grossRealized += (price - oldestBuy.price) * matchAmt;
-          oldestBuy.amount -= matchAmt;
-          remainingSell -= matchAmt;
-          if (oldestBuy.amount <= 0.0000001) inventory.shift();
-        }
-      }
-    }
-
-    const netProfitUsd = Number((grossRealized - feesPaid).toFixed(2));
-    const roiPct = Number(((netProfitUsd / baseCapital) * 100).toFixed(2));
-    const totalVolumeUsd = Number((buyVol + sellVol).toFixed(0));
-
-    return {
-      monthName: name,
-      year: yr,
-      netProfitUsd,
-      roiPct,
-      totalTrades: fills.length,
-      totalVolumeUsd,
-    };
-  }
-
-  const curStart = new Date(Date.UTC(curYear, curMonthIdx, 1, 0, 0, 0));
-  const curEnd = new Date(Date.UTC(curYear, curMonthIdx + 1, 1, 0, 0, 0));
-
-  const prevStart = new Date(Date.UTC(prevYear, prevMonthIdx, 1, 0, 0, 0));
-  const prevEnd = curStart;
-
-  const [currentMonth, previousMonth] = await Promise.all([
-    getStatsForRange(curStart, curEnd, monthNames[curMonthIdx], curYear),
-    getStatsForRange(prevStart, prevEnd, monthNames[prevMonthIdx], prevYear),
-  ]);
-
-  const diffUsd = Number((currentMonth.netProfitUsd - previousMonth.netProfitUsd).toFixed(2));
-  const diffPct = previousMonth.netProfitUsd > 0
-    ? Number(((diffUsd / previousMonth.netProfitUsd) * 100).toFixed(2))
-    : 0;
-
-  return { currentMonth, previousMonth, diffUsd, diffPct };
-}
-
 export async function runTelemetry(isWatch: boolean = false, args: string[] = []) {
   try {
     const { label: periodLabel, sinceDate } = parsePeriodFilter(args);
@@ -167,8 +70,8 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
     // 1. Cálculo Unificado de Patrimonio Mark-to-Market
     const eq: EquitySummary = await calculateAccountEquity(prisma, sinceDate);
 
-    // 2. Cálculo Mensual Comparativo (Mes Actual vs Mes Anterior)
-    const monthly = await calculateMonthlyPerformance(prisma, eq.injectedBaseCapital);
+    // 2. Persistencia y Consulta de Reportes Mensuales en PostgreSQL
+    const monthly = await syncAndFetchMonthlyReports(prisma, eq.injectedBaseCapital);
 
     // 3. Órdenes Abiertas (Depth DOM)
     const openOrders = await prisma.order.findMany({
@@ -265,25 +168,31 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
     );
     console.log(SEPARATOR);
 
-    // SECCIÓN 4: COMPARATIVA MENSUAL (MES ACTUAL VS MES ANTERIOR)
-    console.log(bold(green('🗓️ RENDIMIENTO MENSUAL (COMPARATIVA MES A MES):')));
+    // SECCIÓN 4: COMPARATIVA MENSUAL (PERSISTIDA EN BD)
+    console.log(bold(green('🗓️ RENDIMIENTO MENSUAL (DESDE BASE DE DATOS):')));
     const curProfitFmt = monthly.currentMonth.netProfitUsd >= 0
       ? green(`+$${monthly.currentMonth.netProfitUsd.toFixed(2)} USD`)
       : red(`-$${Math.abs(monthly.currentMonth.netProfitUsd).toFixed(2)} USD`);
-    const prevProfitFmt = monthly.previousMonth.netProfitUsd >= 0
-      ? green(`+$${monthly.previousMonth.netProfitUsd.toFixed(2)} USD`)
-      : red(`-$${Math.abs(monthly.previousMonth.netProfitUsd).toFixed(2)} USD`);
 
     console.log(
-      `  • ${bold(`Mes Actual (${monthly.currentMonth.monthName} ${monthly.currentMonth.year}):`)}   ${curProfitFmt} ${gray(`(${monthly.currentMonth.roiPct >= 0 ? '+' : ''}${monthly.currentMonth.roiPct}%)`)} │ ${monthly.currentMonth.totalTrades} Trades │ $${monthly.currentMonth.totalVolumeUsd.toLocaleString()} Vol`
+      `  • ${bold(`Mes Actual (${monthly.currentMonth.monthName} ${monthly.currentMonth.year}):`)}   ${curProfitFmt} ${gray(`(${monthly.currentMonth.roiPercent >= 0 ? '+' : ''}${monthly.currentMonth.roiPercent}% s/ $${monthly.currentMonth.startingCapital.toFixed(0)})`)} │ ${monthly.currentMonth.totalTrades} Trades │ $${monthly.currentMonth.totalVolumeUsd.toLocaleString()} Vol`
     );
-    console.log(
-      `  • ${bold(`Mes Anterior (${monthly.previousMonth.monthName} ${monthly.previousMonth.year}):`)} ${prevProfitFmt} ${gray(`(${monthly.previousMonth.roiPct >= 0 ? '+' : ''}${monthly.previousMonth.roiPct}%)`)} │ ${monthly.previousMonth.totalTrades} Trades │ $${monthly.previousMonth.totalVolumeUsd.toLocaleString()} Vol`
-    );
-    if (monthly.previousMonth.netProfitUsd > 0) {
-      const diffSymbol = monthly.diffUsd >= 0 ? green('▲') : red('▼');
-      const diffColorFmt = monthly.diffUsd >= 0 ? green(`+$${monthly.diffUsd.toFixed(2)} USD (+${monthly.diffPct}%)`) : red(`-$${Math.abs(monthly.diffUsd).toFixed(2)} USD (${monthly.diffPct}%)`);
-      console.log(`  • ${bold('Variación Intermensual:')}       ${diffSymbol} ${diffColorFmt}`);
+
+    if (monthly.previousMonth) {
+      const prevProfitFmt = monthly.previousMonth.netProfitUsd >= 0
+        ? green(`+$${monthly.previousMonth.netProfitUsd.toFixed(2)} USD`)
+        : red(`-$${Math.abs(monthly.previousMonth.netProfitUsd).toFixed(2)} USD`);
+      console.log(
+        `  • ${bold(`Mes Anterior (${monthly.previousMonth.monthName} ${monthly.previousMonth.year}):`)} ${prevProfitFmt} ${gray(`(${monthly.previousMonth.roiPercent >= 0 ? '+' : ''}${monthly.previousMonth.roiPercent}% s/ $${monthly.previousMonth.startingCapital.toFixed(0)})`)} │ ${monthly.previousMonth.totalTrades} Trades │ $${monthly.previousMonth.totalVolumeUsd.toLocaleString()} Vol`
+      );
+
+      if (monthly.previousMonth.netProfitUsd > 0) {
+        const diffSymbol = monthly.diffUsd >= 0 ? green('▲') : red('▼');
+        const diffColorFmt = monthly.diffUsd >= 0
+          ? green(`+$${monthly.diffUsd.toFixed(2)} USD (+${monthly.diffPct}%)`)
+          : red(`-$${Math.abs(monthly.diffUsd).toFixed(2)} USD (${monthly.diffPct}%)`);
+        console.log(`  • ${bold('Variación Intermensual:')}       ${diffSymbol} ${diffColorFmt}`);
+      }
     }
     console.log(SEPARATOR);
 
