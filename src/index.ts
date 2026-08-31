@@ -619,21 +619,29 @@ async function main() {
 
           const currentConfiguredInvestment = gridManager.getConfig().investment;
 
-          // Si el saldo total físico disponible aumentó un 10% o más respecto al capital configurado
-          if (currentTotalPhysicalEquity.greaterThan(currentConfiguredInvestment.times(1.10))) {
-            const injectedDelta = currentTotalPhysicalEquity.minus(currentConfiguredInvestment);
+          // Si el saldo total físico disponible aumentó un 8% o más respecto al capital configurado
+          if (currentTotalPhysicalEquity.greaterThan(currentConfiguredInvestment.times(1.08))) {
+            const rawDelta = currentTotalPhysicalEquity.minus(currentConfiguredInvestment);
+            
+            // Redondear el delta inyectado a múltiplos limpios si está a menos de $15 de distancia (ej: $1998 -> $2000, $3008 -> $3000)
+            let cleanInjectedDelta = rawDelta;
+            const round100 = Math.round(rawDelta.toNumber() / 100) * 100;
+            if (Math.abs(rawDelta.toNumber() - round100) <= 25 && round100 > 0) {
+              cleanInjectedDelta = new Decimal(round100);
+            }
+
             console.log(
-              `\n[Capital Deposit Detector] 💰 ¡NUEVA INYECCIÓN DETECTADA EN BINANCE SPOT! +$${injectedDelta.toFixed(2)} USD (Saldo total: $${currentTotalPhysicalEquity.toFixed(2)} USD > Anterior: $${currentConfiguredInvestment.toFixed(2)} USD).`
+              `\n[Capital Deposit Detector] 💰 ¡NUEVA INYECCIÓN DETECTADA EN BINANCE SPOT! +$${cleanInjectedDelta.toFixed(2)} USD (Saldo total físico: $${currentTotalPhysicalEquity.toFixed(2)} USD).`
             );
             console.log(`[Capital Deposit Detector] 🔄 Escalando inversión de la grilla a $${currentTotalPhysicalEquity.toFixed(2)} USD y rebalanceando grilla activa...`);
 
             gridManager.updateInvestment(currentTotalPhysicalEquity);
             await repository.setBotConfig('GRID_INVESTMENT', currentTotalPhysicalEquity.toFixed(2));
             
-            // Incrementar la inyección base histórica acumulada de forma aditiva
+            // Incrementar la inyección base histórica acumulada exclusivamente con el delta neto
             const prevInjectedStr = await repository.getBotConfig('LIFETIME_ALLOCATION_USD');
-            const prevInjected = prevInjectedStr ? new Decimal(prevInjectedStr) : new Decimal(4160.00);
-            const newTotalInjected = prevInjected.plus(injectedDelta);
+            const prevInjected = prevInjectedStr ? new Decimal(prevInjectedStr) : new Decimal(6160.00);
+            const newTotalInjected = prevInjected.plus(cleanInjectedDelta);
             await repository.setBotConfig('LIFETIME_ALLOCATION_USD', newTotalInjected.toFixed(2));
 
             const currentAtr = volatilityEngine.getCurrentAtr() || initialAtr;
@@ -641,7 +649,7 @@ async function main() {
 
             await notifier.sendSlackMessage(
               `💰 *NUEVA INYECCIÓN DETECTADA Y ASIGNADA A LA GRILLA*\n` +
-              `• *Capital Inyectado Adicional:* +$${injectedDelta.toFixed(2)} USD\n` +
+              `• *Capital Inyectado Adicional:* +$${cleanInjectedDelta.toFixed(2)} USD\n` +
               `• *Nuevo Patrimonio Total:* $${currentTotalPhysicalEquity.toFixed(2)} USD\n` +
               `• *Inyección Base Total:* $${newTotalInjected.toFixed(2)} USD\n` +
               `• *USDT Disponible:* $${usdtFree.toFixed(2)} USDT | *BTC Disponible:* ${btcFree.toFixed(6)} BTC\n` +
