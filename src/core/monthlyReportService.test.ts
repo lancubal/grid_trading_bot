@@ -1,27 +1,30 @@
 import { describe, it, expect } from 'vitest';
-import { calculateRangeProfit } from './monthlyReportService';
+import { calculateContinuousMonthlyStats } from './monthlyReportService';
 
 describe('MonthlyReportService Unit Tests', () => {
-  it('debe calcular correctamente el profit neto, volumen y comisiones para un conjunto de fills FIFO', () => {
+  it('debe mantener la continuidad del inventario FIFO a través de distintos meses', () => {
     const mockFills = [
-      { side: 'BUY', price: 60000, amount: 0.1, fee: 2.25 },
-      { side: 'SELL', price: 61000, amount: 0.1, fee: 2.28 },
+      // Compra en Agosto
+      { side: 'BUY', price: 60000, amount: 0.1, fee: 2.25, updatedAt: new Date('2026-08-31T20:00:00Z') },
+      // Venta en Septiembre
+      { side: 'SELL', price: 61000, amount: 0.1, fee: 2.28, updatedAt: new Date('2026-09-01T05:00:00Z') },
     ];
 
-    const result = calculateRangeProfit(mockFills);
+    const statsMap = calculateContinuousMonthlyStats(mockFills);
 
-    // Spread: (61000 - 60000) * 0.1 = 100 USD
-    // Fees: 2.25 + 2.28 = 4.53 USD
-    // Net profit: 100 - 4.53 = 95.47 USD
-    expect(result.netProfitUsd).toBe(95.47);
-    expect(result.totalVolumeUsd).toBe(12100);
-    expect(result.totalFeesUsd).toBe(4.53);
+    // Agosto: Compra (no realiza profit, paga fee)
+    const augStats = statsMap.get('2026-8')!;
+    expect(augStats.netProfitUsd).toBe(-2.25);
+    expect(augStats.totalTrades).toBe(1);
+
+    // Septiembre: Venta cerrando compra de Agosto (Spread = +100 USD, Fee = 2.28 -> Net = +97.72 USD)
+    const sepStats = statsMap.get('2026-9')!;
+    expect(sepStats.netProfitUsd).toBe(97.72);
+    expect(sepStats.totalTrades).toBe(1);
   });
 
-  it('debe devolver 0 si no hay fills en el período', () => {
-    const result = calculateRangeProfit([]);
-    expect(result.netProfitUsd).toBe(0);
-    expect(result.totalVolumeUsd).toBe(0);
-    expect(result.totalFeesUsd).toBe(0);
+  it('debe devolver mapa vacío si no hay fills', () => {
+    const statsMap = calculateContinuousMonthlyStats([]);
+    expect(statsMap.size).toBe(0);
   });
 });

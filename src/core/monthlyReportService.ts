@@ -22,36 +22,58 @@ const MONTH_NAMES = [
 ];
 
 /**
- * Calcula la ganancia neta realizada (FIFO matching de fills) dentro de un rango de fechas.
+ * Calcula la ganancia neta realizada (FIFO matching de fills) manteniendo el inventario continuo.
  */
-export function calculateRangeProfit(fills: Array<{ side: string; price: any; amount: any; fee?: any }>): {
+export function calculateContinuousMonthlyStats(allFills: Array<{ side: string; price: any; amount: any; fee?: any; updatedAt: Date }>): Map<string, {
   netProfitUsd: number;
   totalVolumeUsd: number;
   totalFeesUsd: number;
-} {
-  let buyVol = 0;
-  let sellVol = 0;
-  let feesPaid = 0;
-  let grossRealized = 0;
+  totalTrades: number;
+}> {
+  const monthStats = new Map<string, {
+    netProfitUsd: number;
+    totalVolumeUsd: number;
+    totalFeesUsd: number;
+    totalTrades: number;
+    grossRealized: number;
+  }>();
+
   const inventory: { price: number; amount: number }[] = [];
 
-  for (const f of fills) {
+  for (const f of allFills) {
+    const y = f.updatedAt.getUTCFullYear();
+    const m = f.updatedAt.getUTCMonth() + 1;
+    const key = `${y}-${m}`;
+
+    if (!monthStats.has(key)) {
+      monthStats.set(key, {
+        netProfitUsd: 0,
+        totalVolumeUsd: 0,
+        totalFeesUsd: 0,
+        totalTrades: 0,
+        grossRealized: 0,
+      });
+    }
+
+    const st = monthStats.get(key)!;
+    st.totalTrades += 1;
+
     const price = Number(f.price);
     const amount = Number(f.amount);
     const notional = price * amount;
     const fee = f.fee ? Number(f.fee) : notional * 0.00075;
-    feesPaid += fee;
+    st.totalFeesUsd += fee;
+    st.totalVolumeUsd += notional;
 
     if (f.side === 'BUY') {
-      buyVol += notional;
       inventory.push({ price, amount });
     } else {
-      sellVol += notional;
       let remainingSell = amount;
       while (remainingSell > 0.0000001 && inventory.length > 0) {
         const oldestBuy = inventory[0];
         const matchAmt = Math.min(remainingSell, oldestBuy.amount);
-        grossRealized += (price - oldestBuy.price) * matchAmt;
+        const realizedProfit = (price - oldestBuy.price) * matchAmt;
+        st.grossRealized += realizedProfit;
         oldestBuy.amount -= matchAmt;
         remainingSell -= matchAmt;
         if (oldestBuy.amount <= 0.0000001) inventory.shift();
@@ -59,15 +81,27 @@ export function calculateRangeProfit(fills: Array<{ side: string; price: any; am
     }
   }
 
-  const netProfitUsd = Number((grossRealized - feesPaid).toFixed(2));
-  const totalVolumeUsd = Number((buyVol + sellVol).toFixed(2));
-  const totalFeesUsd = Number(feesPaid.toFixed(2));
+  const result = new Map<string, {
+    netProfitUsd: number;
+    totalVolumeUsd: number;
+    totalFeesUsd: number;
+    totalTrades: number;
+  }>();
 
-  return { netProfitUsd, totalVolumeUsd, totalFeesUsd };
+  for (const [key, st] of monthStats.entries()) {
+    result.set(key, {
+      netProfitUsd: Number((st.grossRealized - st.totalFeesUsd).toFixed(2)),
+      totalVolumeUsd: Number(st.totalVolumeUsd.toFixed(2)),
+      totalFeesUsd: Number(st.totalFeesUsd.toFixed(2)),
+      totalTrades: st.totalTrades,
+    });
+  }
+
+  return result;
 }
 
 /**
- * Sincroniza y persiste los reportes mensuales en la base de datos PostgreSQL.
+ * Sincroniza y persiste los reportes mensuales en la base de datos PostgreSQL usando FIFO continuo.
  * Cierra automáticamente meses pasados y mantiene actualizado el mes en curso.
  */
 export async function syncAndFetchMonthlyReports(
@@ -84,21 +118,18 @@ export async function syncAndFetchMonthlyReports(
   const curYear = now.getUTCFullYear();
   const curMonth = now.getUTCMonth() + 1; // 1-12
 
-  // 1. Obtener todas las órdenes ejecutadas
+  // 1. Obtener todas las órdenes ejecutadas ordenadas cronológicamente
   const allFills = await prisma.order.findMany({
     where: { status: 'FILLED' },
     orderBy: { updatedAt: 'asc' },
     select: { side: true, price: true, amount: true, fee: true, updatedAt: true },
   }).catch(() => []);
 
-  // Encontrar meses con actividad
-  const activeMonthKeys = new Set<string>();
-  for (const f of allFills) {
-    const y = f.updatedAt.getUTCFullYear();
-    const m = f.updatedAt.getUTCMonth() + 1;
-    activeMonthKeys.add(`${y}-${m}`);
-  }
-  // Asegurar que el mes actual esté presente
+  // 2. Calcular estadísticas mensuales con inventario FIFO continuo
+  const monthStatsMap = calculateContinuousMonthlyStats(allFills);
+
+  // Asegurar que los meses relevantes estén en la lista
+  const activeMonthKeys = new Set<string>(Array.from(monthStatsMap.keys()));
   activeMonthKeys.add(`${curYear}-${curMonth}`);
 
   const sortedMonthKeys = Array.from(activeMonthKeys).sort((a, b) => {
@@ -112,20 +143,20 @@ export async function syncAndFetchMonthlyReports(
 
   for (const key of sortedMonthKeys) {
     const [y, m] = key.split('-').map(Number);
-    const monthStart = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0));
-    const monthEnd = new Date(Date.UTC(y, m, 1, 0, 0, 0));
     const isCurrent = y === curYear && m === curMonth;
-
-    // Fills de este mes específico
-    const monthFills = allFills.filter((f) => f.updatedAt >= monthStart && f.updatedAt < monthEnd);
-    const { netProfitUsd, totalVolumeUsd, totalFeesUsd } = calculateRangeProfit(monthFills);
+    const st = monthStatsMap.get(key) || {
+      netProfitUsd: 0,
+      totalVolumeUsd: 0,
+      totalFeesUsd: 0,
+      totalTrades: 0,
+    };
 
     const monthName = MONTH_NAMES[m - 1] || `Mes ${m}`;
     const startingCapital = Number(runningStartingCapital.toFixed(2));
     const injectedThisMonth = isCurrent ? Math.max(0, currentInjectedCapital - startingCapital) : 0;
     const baseOperating = startingCapital + injectedThisMonth;
-    const roiPercent = baseOperating > 0 ? Number(((netProfitUsd / baseOperating) * 100).toFixed(2)) : 0;
-    const closingCapital = Number((baseOperating + netProfitUsd).toFixed(2));
+    const roiPercent = baseOperating > 0 ? Number(((st.netProfitUsd / baseOperating) * 100).toFixed(2)) : 0;
+    const closingCapital = Number((baseOperating + st.netProfitUsd).toFixed(2));
 
     // Guardar o actualizar en la tabla MonthlyReport de PostgreSQL
     try {
@@ -138,11 +169,11 @@ export async function syncAndFetchMonthlyReports(
           startingCapital: new Decimal(startingCapital),
           injectedCapital: new Decimal(injectedThisMonth),
           closingCapital: new Decimal(closingCapital),
-          netProfitUsd: new Decimal(netProfitUsd),
+          netProfitUsd: new Decimal(st.netProfitUsd),
           roiPercent: new Decimal(roiPercent),
-          totalTrades: monthFills.length,
-          totalVolumeUsd: new Decimal(totalVolumeUsd),
-          totalFeesUsd: new Decimal(totalFeesUsd),
+          totalTrades: st.totalTrades,
+          totalVolumeUsd: new Decimal(st.totalVolumeUsd),
+          totalFeesUsd: new Decimal(st.totalFeesUsd),
           isClosed: !isCurrent,
         },
         create: {
@@ -152,11 +183,11 @@ export async function syncAndFetchMonthlyReports(
           startingCapital: new Decimal(startingCapital),
           injectedCapital: new Decimal(injectedThisMonth),
           closingCapital: new Decimal(closingCapital),
-          netProfitUsd: new Decimal(netProfitUsd),
+          netProfitUsd: new Decimal(st.netProfitUsd),
           roiPercent: new Decimal(roiPercent),
-          totalTrades: monthFills.length,
-          totalVolumeUsd: new Decimal(totalVolumeUsd),
-          totalFeesUsd: new Decimal(totalFeesUsd),
+          totalTrades: st.totalTrades,
+          totalVolumeUsd: new Decimal(st.totalVolumeUsd),
+          totalFeesUsd: new Decimal(st.totalFeesUsd),
           isClosed: !isCurrent,
         },
       });
@@ -171,11 +202,11 @@ export async function syncAndFetchMonthlyReports(
       startingCapital,
       injectedCapital: injectedThisMonth,
       closingCapital,
-      netProfitUsd,
+      netProfitUsd: st.netProfitUsd,
       roiPercent,
-      totalTrades: monthFills.length,
-      totalVolumeUsd,
-      totalFeesUsd,
+      totalTrades: st.totalTrades,
+      totalVolumeUsd: st.totalVolumeUsd,
+      totalFeesUsd: st.totalFeesUsd,
       isClosed: !isCurrent,
     });
 
