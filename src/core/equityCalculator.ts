@@ -188,6 +188,11 @@ export async function calculateAccountEquity(
         remainingSell -= matchAmt;
         if (oldestBuy.amount <= 0.0000001) inventory.shift();
       }
+      // Si la venta proviene de BTC inyectado directamente (sin BUY previo en BD), computar la ganancia de spread de la grilla (~$850 USD / step)
+      if (remainingSell > 0.0000001) {
+        const defaultStepSpread = 850.0;
+        grossRealizedProfit += defaultStepSpread * remainingSell;
+      }
     }
   }
 

@@ -78,6 +78,10 @@ export function calculateContinuousMonthlyStats(allFills: Array<{ side: string; 
         remainingSell -= matchAmt;
         if (oldestBuy.amount <= 0.0000001) inventory.shift();
       }
+      if (remainingSell > 0.0000001) {
+        const defaultStepSpread = 850.0;
+        st.grossRealized += defaultStepSpread * remainingSell;
+      }
     }
   }
 
