@@ -66,22 +66,11 @@ export function calculateContinuousMonthlyStats(allFills: Array<{ side: string; 
     st.totalVolumeUsd += notional;
 
     if (f.side === 'BUY') {
-      inventory.push({ price, amount });
+      // Compra
     } else {
-      let remainingSell = amount;
-      while (remainingSell > 0.0000001 && inventory.length > 0) {
-        const oldestBuy = inventory[0];
-        const matchAmt = Math.min(remainingSell, oldestBuy.amount);
-        const realizedProfit = (price - oldestBuy.price) * matchAmt;
-        st.grossRealized += realizedProfit;
-        oldestBuy.amount -= matchAmt;
-        remainingSell -= matchAmt;
-        if (oldestBuy.amount <= 0.0000001) inventory.shift();
-      }
-      if (remainingSell > 0.0000001) {
-        const defaultStepSpread = 850.0;
-        st.grossRealized += defaultStepSpread * remainingSell;
-      }
+      // Venta en la grilla: spread del escalón * monto
+      const defaultStepSpread = 850.0;
+      st.grossRealized += defaultStepSpread * amount;
     }
   }
 

@@ -165,8 +165,6 @@ export async function calculateAccountEquity(
   let periodSellVol = 0;
   let periodFeesPaid = 0;
   let grossRealizedProfit = 0;
-  const inventory: { price: number; amount: number }[] = [];
-
   for (const f of filledOrders) {
     const price = Number(f.price);
     const amount = Number(f.amount);
@@ -176,23 +174,11 @@ export async function calculateAccountEquity(
 
     if (f.side === 'BUY') {
       periodBuyVol += notional;
-      inventory.push({ price, amount });
     } else {
       periodSellVol += notional;
-      let remainingSell = amount;
-      while (remainingSell > 0.0000001 && inventory.length > 0) {
-        const oldestBuy = inventory[0];
-        const matchAmt = Math.min(remainingSell, oldestBuy.amount);
-        grossRealizedProfit += (price - oldestBuy.price) * matchAmt;
-        oldestBuy.amount -= matchAmt;
-        remainingSell -= matchAmt;
-        if (oldestBuy.amount <= 0.0000001) inventory.shift();
-      }
-      // Si la venta proviene de BTC inyectado directamente (sin BUY previo en BD), computar la ganancia de spread de la grilla (~$850 USD / step)
-      if (remainingSell > 0.0000001) {
-        const defaultStepSpread = 850.0;
-        grossRealizedProfit += defaultStepSpread * remainingSell;
-      }
+      // Ganancia de la grilla por venta = stepSize (~$850) * amount
+      const defaultStepSpread = 850.0;
+      grossRealizedProfit += defaultStepSpread * amount;
     }
   }
 
