@@ -13,6 +13,7 @@ export interface MonthlySummaryData {
   totalTrades: number;
   totalVolumeUsd: number;
   totalFeesUsd: number;
+  netBtcAccumulated: number;
   isClosed: boolean;
 }
 
@@ -29,6 +30,7 @@ export function calculateContinuousMonthlyStats(allFills: Array<{ side: string; 
   totalVolumeUsd: number;
   totalFeesUsd: number;
   totalTrades: number;
+  netBtcAccumulated: number;
 }> {
   const monthStats = new Map<string, {
     netProfitUsd: number;
@@ -79,7 +81,18 @@ export function calculateContinuousMonthlyStats(allFills: Array<{ side: string; 
     totalVolumeUsd: number;
     totalFeesUsd: number;
     totalTrades: number;
+    netBtcAccumulated: number;
   }>();
+
+  const monthBtcDelta = new Map<string, number>();
+  for (const f of allFills) {
+    const y = f.updatedAt.getUTCFullYear();
+    const m = f.updatedAt.getUTCMonth() + 1;
+    const key = `${y}-${m}`;
+    const amt = Number(f.amount);
+    const prev = monthBtcDelta.get(key) || 0;
+    monthBtcDelta.set(key, prev + (f.side === 'BUY' ? amt : -amt));
+  }
 
   for (const [key, st] of monthStats.entries()) {
     result.set(key, {
@@ -87,6 +100,7 @@ export function calculateContinuousMonthlyStats(allFills: Array<{ side: string; 
       totalVolumeUsd: Number(st.totalVolumeUsd.toFixed(2)),
       totalFeesUsd: Number(st.totalFeesUsd.toFixed(2)),
       totalTrades: st.totalTrades,
+      netBtcAccumulated: Number((monthBtcDelta.get(key) || 0).toFixed(6)),
     });
   }
 
@@ -142,6 +156,7 @@ export async function syncAndFetchMonthlyReports(
       totalVolumeUsd: 0,
       totalFeesUsd: 0,
       totalTrades: 0,
+      netBtcAccumulated: 0,
     };
 
     const monthName = MONTH_NAMES[m - 1] || `Mes ${m}`;
@@ -200,6 +215,7 @@ export async function syncAndFetchMonthlyReports(
       totalTrades: st.totalTrades,
       totalVolumeUsd: st.totalVolumeUsd,
       totalFeesUsd: st.totalFeesUsd,
+      netBtcAccumulated: st.netBtcAccumulated,
       isClosed: !isCurrent,
     });
 
@@ -218,6 +234,7 @@ export async function syncAndFetchMonthlyReports(
     totalTrades: 0,
     totalVolumeUsd: 0,
     totalFeesUsd: 0,
+    netBtcAccumulated: 0,
     isClosed: false,
   };
 

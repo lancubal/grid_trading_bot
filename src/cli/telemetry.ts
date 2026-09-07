@@ -148,10 +148,10 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
     // SECCIÓN 2: DESGLOSE DE SALDOS EN SPOT
     console.log(bold(cyan('💼 DESGLOSE SPOT EN BINANCE (VALORIZADO MARK-TO-MARKET):')));
     console.log(
-      `  • ${bold('Bitcoin (BTC):')}  ${eq.btcBalance.total.toFixed(5)} BTC (${bold('$' + eq.btcBalance.valueUsd.toFixed(2) + ' USD')}) ${gray('[Free: ' + eq.btcBalance.free.toFixed(5) + ' | En Órdenes: ' + eq.btcBalance.used.toFixed(5) + ']')}`
+      `  • ${bold('Bitcoin (BTC):')}  ${bold(eq.btcBalance.total.toFixed(5) + ' BTC')} (${green('$' + eq.btcBalance.valueUsd.toFixed(2) + ' USD')}) ${gray('[Libre: ' + eq.btcBalance.free.toFixed(5) + ' | En Órdenes: ' + eq.btcBalance.used.toFixed(5) + ' BTC]')}`
     );
     console.log(
-      `  • ${bold('Dólares (USDT):')} ${bold('$' + eq.usdtBalance.total.toFixed(2) + ' USD')} ${gray('[Free: $' + eq.usdtBalance.free.toFixed(2) + ' | En Órdenes: $' + eq.usdtBalance.used.toFixed(2) + ']')}`
+      `  • ${bold('Dólares (USDT):')} ${bold('$' + eq.usdtBalance.total.toFixed(2) + ' USD')} ${gray('[Libre: $' + eq.usdtBalance.free.toFixed(2) + ' | En Órdenes: $' + eq.usdtBalance.used.toFixed(2) + ' USDT]')}`
     );
     console.log(
       `  • ${bold('Comisiones BNB:')} ${eq.bnbBalance.total.toFixed(4)} BNB (${bold('$' + eq.bnbBalance.valueUsd.toFixed(2) + ' USD')}) ${green('✓ 25% Descuento Activo')}`
@@ -173,17 +173,23 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
     const curProfitFmt = monthly.currentMonth.netProfitUsd >= 0
       ? green(`+$${monthly.currentMonth.netProfitUsd.toFixed(2)} USD`)
       : red(`-$${Math.abs(monthly.currentMonth.netProfitUsd).toFixed(2)} USD`);
+    const curBtcDeltaFmt = monthly.currentMonth.netBtcAccumulated >= 0
+      ? green(`+${monthly.currentMonth.netBtcAccumulated.toFixed(5)} BTC`)
+      : red(`${monthly.currentMonth.netBtcAccumulated.toFixed(5)} BTC`);
 
     console.log(
-      `  • ${bold(`Mes Actual (${monthly.currentMonth.monthName} ${monthly.currentMonth.year}):`)}   ${curProfitFmt} ${gray(`(${monthly.currentMonth.roiPercent >= 0 ? '+' : ''}${monthly.currentMonth.roiPercent}% s/ $${monthly.currentMonth.startingCapital.toFixed(0)})`)} │ ${monthly.currentMonth.totalTrades} Trades │ $${monthly.currentMonth.totalVolumeUsd.toLocaleString()} Vol`
+      `  • ${bold(`Mes Actual (${monthly.currentMonth.monthName} ${monthly.currentMonth.year}):`)}   ${curProfitFmt} ${gray(`(${monthly.currentMonth.roiPercent >= 0 ? '+' : ''}${monthly.currentMonth.roiPercent}% s/ $${monthly.currentMonth.startingCapital.toFixed(0)})`)} │ 🪙 ${curBtcDeltaFmt} │ ${monthly.currentMonth.totalTrades} Trades │ $${monthly.currentMonth.totalVolumeUsd.toLocaleString()} Vol`
     );
 
     if (monthly.previousMonth) {
       const prevProfitFmt = monthly.previousMonth.netProfitUsd >= 0
         ? green(`+$${monthly.previousMonth.netProfitUsd.toFixed(2)} USD`)
         : red(`-$${Math.abs(monthly.previousMonth.netProfitUsd).toFixed(2)} USD`);
+      const prevBtcDeltaFmt = monthly.previousMonth.netBtcAccumulated >= 0
+        ? green(`+${monthly.previousMonth.netBtcAccumulated.toFixed(5)} BTC`)
+        : red(`${monthly.previousMonth.netBtcAccumulated.toFixed(5)} BTC`);
       console.log(
-        `  • ${bold(`Mes Anterior (${monthly.previousMonth.monthName} ${monthly.previousMonth.year}):`)} ${prevProfitFmt} ${gray(`(${monthly.previousMonth.roiPercent >= 0 ? '+' : ''}${monthly.previousMonth.roiPercent}% s/ $${monthly.previousMonth.startingCapital.toFixed(0)})`)} │ ${monthly.previousMonth.totalTrades} Trades │ $${monthly.previousMonth.totalVolumeUsd.toLocaleString()} Vol`
+        `  • ${bold(`Mes Anterior (${monthly.previousMonth.monthName} ${monthly.previousMonth.year}):`)} ${prevProfitFmt} ${gray(`(${monthly.previousMonth.roiPercent >= 0 ? '+' : ''}${monthly.previousMonth.roiPercent}% s/ $${monthly.previousMonth.startingCapital.toFixed(0)})`)} │ 🪙 ${prevBtcDeltaFmt} │ ${monthly.previousMonth.totalTrades} Trades │ $${monthly.previousMonth.totalVolumeUsd.toLocaleString()} Vol`
       );
 
       if (monthly.previousMonth.netProfitUsd > 0) {
