@@ -394,6 +394,19 @@ async function main() {
       const grossProfit = stepSize.times(amount);
       const feeUsd = event.fee?.cost ? new Decimal(event.fee.cost) : grossProfit.times(0.001);
       netProfitUsd = Decimal.max(0.005, grossProfit.minus(feeUsd));
+
+      // AUTO-COMPOUNDING INMEDIATO:
+      // Reinvertir el profit neto directamente en el capital de trabajo de la grilla (GRID_INVESTMENT).
+      // NO toca LIFETIME_ALLOCATION_USD (Inyección Base), de modo que la inyección base permanece intacta.
+      try {
+        const currentInvestment = gridManager.getConfig().investment;
+        const newInvestment = currentInvestment.plus(netProfitUsd);
+        gridManager.updateInvestment(newInvestment);
+        await repository.setBotConfig('GRID_INVESTMENT', newInvestment.toFixed(2));
+        console.log(`[Auto-Compounding] 📈 Profit reinvertido: +$${netProfitUsd.toFixed(4)} USD. Nuevo GRID_INVESTMENT: $${newInvestment.toFixed(2)} USD`);
+      } catch (err: any) {
+        console.warn('[Auto-Compounding Warning] No se pudo actualizar GRID_INVESTMENT tras venta:', err.message || err);
+      }
     }
 
     // Notificación en vivo a Slack
@@ -552,6 +565,7 @@ async function main() {
   let lastOobRebalanceTime = 0;
   let lastGapRebalanceTime = 0;
   let lastBnbAlertTime = 0;
+  let lastObservedBalances: { usdt: Decimal; btc: Decimal } | null = null;
   const OOB_REBALANCE_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutos de cooldown entre recentrados por fuera de rango
   const GAP_REBALANCE_COOLDOWN_MS = 60 * 60 * 1000; // 1 hora de cooldown mínimo para el guardián de brechas
   const BNB_ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 horas de cooldown para alerta de saldo bajo de BNB
@@ -617,44 +631,53 @@ async function main() {
           const totalBtc = btcFree.plus(btcUsed);
           const currentTotalPhysicalEquity = totalUsdt.plus(totalBtc.times(ticker.last));
 
-          const currentConfiguredInvestment = gridManager.getConfig().investment;
+          if (lastObservedBalances === null) {
+            // Inicializar la línea base en el primer tick de chequeo
+            lastObservedBalances = { usdt: totalUsdt, btc: totalBtc };
+          } else {
+            // Aislar flujos de capital externos:
+            // deltaUsdt + (deltaBtc * spot) ignora trades normales (delta neto ~ 0) y fluctuaciones de precio de mercado (delta = 0).
+            const deltaUsdt = totalUsdt.minus(lastObservedBalances.usdt);
+            const deltaBtc = totalBtc.minus(lastObservedBalances.btc);
+            const netExternalInflow = deltaUsdt.plus(deltaBtc.times(ticker.last));
 
-          // Si el saldo total físico disponible aumentó un 8% o más respecto al capital configurado
-          if (currentTotalPhysicalEquity.greaterThan(currentConfiguredInvestment.times(1.08))) {
-            const rawDelta = currentTotalPhysicalEquity.minus(currentConfiguredInvestment);
-            
-            // Redondear el delta inyectado a múltiplos limpios si está a menos de $15 de distancia (ej: $1998 -> $2000, $3008 -> $3000)
-            let cleanInjectedDelta = rawDelta;
-            const round100 = Math.round(rawDelta.toNumber() / 100) * 100;
-            if (Math.abs(rawDelta.toNumber() - round100) <= 25 && round100 > 0) {
-              cleanInjectedDelta = new Decimal(round100);
+            // Si hay una inyección externa neta positiva >= $50 USD
+            if (netExternalInflow.greaterThanOrEqualTo(50)) {
+              let cleanInjectedDelta = netExternalInflow.toDecimalPlaces(2);
+              const roundInt = Math.round(cleanInjectedDelta.toNumber());
+              if (Math.abs(cleanInjectedDelta.toNumber() - roundInt) <= 0.05) {
+                cleanInjectedDelta = new Decimal(roundInt);
+              }
+
+              console.log(
+                `\n[Capital Deposit Detector] 💰 ¡NUEVA INYECCIÓN DETECTADA EN BINANCE SPOT! +$${cleanInjectedDelta.toFixed(2)} USD (Delta USDT: $${deltaUsdt.toFixed(2)}, Delta BTC: ${deltaBtc.toFixed(6)}). Saldo total físico: $${currentTotalPhysicalEquity.toFixed(2)} USD.`
+              );
+              console.log(`[Capital Deposit Detector] 🔄 Escalando inversión de la grilla a $${currentTotalPhysicalEquity.toFixed(2)} USD y rebalanceando grilla activa...`);
+
+              gridManager.updateInvestment(currentTotalPhysicalEquity);
+              await repository.setBotConfig('GRID_INVESTMENT', currentTotalPhysicalEquity.toFixed(2));
+
+              // Incrementar la inyección base histórica acumulada exclusivamente con el delta neto
+              const prevInjectedStr = await repository.getBotConfig('LIFETIME_ALLOCATION_USD');
+              const prevInjected = prevInjectedStr ? new Decimal(prevInjectedStr) : new Decimal(10955.00);
+              const newTotalInjected = prevInjected.plus(cleanInjectedDelta);
+              await repository.setBotConfig('LIFETIME_ALLOCATION_USD', newTotalInjected.toFixed(2));
+
+              const currentAtr = volatilityEngine.getCurrentAtr() || initialAtr;
+              await performGridRebalance(currentAtr, ticker.last, false);
+
+              await notifier.sendSlackMessage(
+                `💰 *NUEVA INYECCIÓN DETECTADA Y ASIGNADA A LA GRILLA*\n` +
+                `• *Capital Inyectado Adicional:* +$${cleanInjectedDelta.toFixed(2)} USD\n` +
+                `• *Nuevo Patrimonio Total:* $${currentTotalPhysicalEquity.toFixed(2)} USD\n` +
+                `• *Inyección Base Total:* $${newTotalInjected.toFixed(2)} USD\n` +
+                `• *USDT Disponible:* $${usdtFree.toFixed(2)} USDT | *BTC Disponible:* ${btcFree.toFixed(6)} BTC\n` +
+                `• *Grilla Activa:* Re-sembrada y ajustada con el nuevo capital ampliado 🚀`
+              );
             }
 
-            console.log(
-              `\n[Capital Deposit Detector] 💰 ¡NUEVA INYECCIÓN DETECTADA EN BINANCE SPOT! +$${cleanInjectedDelta.toFixed(2)} USD (Saldo total físico: $${currentTotalPhysicalEquity.toFixed(2)} USD).`
-            );
-            console.log(`[Capital Deposit Detector] 🔄 Escalando inversión de la grilla a $${currentTotalPhysicalEquity.toFixed(2)} USD y rebalanceando grilla activa...`);
-
-            gridManager.updateInvestment(currentTotalPhysicalEquity);
-            await repository.setBotConfig('GRID_INVESTMENT', currentTotalPhysicalEquity.toFixed(2));
-            
-            // Incrementar la inyección base histórica acumulada exclusivamente con el delta neto
-            const prevInjectedStr = await repository.getBotConfig('LIFETIME_ALLOCATION_USD');
-            const prevInjected = prevInjectedStr ? new Decimal(prevInjectedStr) : new Decimal(6160.00);
-            const newTotalInjected = prevInjected.plus(cleanInjectedDelta);
-            await repository.setBotConfig('LIFETIME_ALLOCATION_USD', newTotalInjected.toFixed(2));
-
-            const currentAtr = volatilityEngine.getCurrentAtr() || initialAtr;
-            await performGridRebalance(currentAtr, ticker.last, false);
-
-            await notifier.sendSlackMessage(
-              `💰 *NUEVA INYECCIÓN DETECTADA Y ASIGNADA A LA GRILLA*\n` +
-              `• *Capital Inyectado Adicional:* +$${cleanInjectedDelta.toFixed(2)} USD\n` +
-              `• *Nuevo Patrimonio Total:* $${currentTotalPhysicalEquity.toFixed(2)} USD\n` +
-              `• *Inyección Base Total:* $${newTotalInjected.toFixed(2)} USD\n` +
-              `• *USDT Disponible:* $${usdtFree.toFixed(2)} USDT | *BTC Disponible:* ${btcFree.toFixed(6)} BTC\n` +
-              `• *Grilla Activa:* Re-sembrada y ajustada con el nuevo capital ampliado 🚀`
-            );
+            // Actualizar la última posición física observada para el siguiente intervalo
+            lastObservedBalances = { usdt: totalUsdt, btc: totalBtc };
           }
         } catch (err: any) {
           console.warn('[Capital Deposit Detector Warning] Error verificando depósito de capital:', err.message || err);
