@@ -27,11 +27,15 @@ export interface EquitySummary {
   injectedBaseCapital: number;
   netRealizedTradingProfit: number;
   unrealizedFloatingProfit: number;
+  systemBookValueUsd: number;
+  marketValuationDeltaUsd: number;
+  marketValuationDeltaPct: number;
   totalAccountReturnUsd: number;
   totalAccountReturnPct: number;
   compoundingRunRatePct: number;
   targetGoalUsd: number;
   progressTowardsGoalPct: number;
+  bookValueProgressPct: number;
   remainingTowardsGoalUsd: number;
 }
 
@@ -183,12 +187,19 @@ export async function calculateAccountEquity(
   }
 
   const netRealizedTradingProfit = Number((grossRealizedProfit - periodFeesPaid).toFixed(2));
+  const systemBookValueUsd = Number((injectedBaseCapital + netRealizedTradingProfit).toFixed(2));
+  const marketValuationDeltaUsd = Number((totalEquityUsd - systemBookValueUsd).toFixed(2));
+  const marketValuationDeltaPct = systemBookValueUsd > 0
+    ? Number(((marketValuationDeltaUsd / systemBookValueUsd) * 100).toFixed(2))
+    : 0;
+
   const totalAccountReturnUsd = Number((totalEquityUsd - injectedBaseCapital).toFixed(2));
-  const unrealizedFloatingProfit = Number((totalAccountReturnUsd - netRealizedTradingProfit).toFixed(2));
+  const unrealizedFloatingProfit = marketValuationDeltaUsd;
   const totalAccountReturnPct = Number(((totalAccountReturnUsd / injectedBaseCapital) * 100).toFixed(2));
   const compoundingRunRatePct = Number(((netRealizedTradingProfit / injectedBaseCapital) * 100).toFixed(2));
 
   const progressTowardsGoalPct = Number(((totalEquityUsd / targetGoalUsd) * 100).toFixed(2));
+  const bookValueProgressPct = Number(((systemBookValueUsd / targetGoalUsd) * 100).toFixed(2));
   const remainingTowardsGoalUsd = Math.max(0, Number((targetGoalUsd - totalEquityUsd).toFixed(2)));
 
   return {
@@ -215,11 +226,15 @@ export async function calculateAccountEquity(
     injectedBaseCapital,
     netRealizedTradingProfit,
     unrealizedFloatingProfit,
+    systemBookValueUsd,
+    marketValuationDeltaUsd,
+    marketValuationDeltaPct,
     totalAccountReturnUsd,
     totalAccountReturnPct,
     compoundingRunRatePct,
     targetGoalUsd,
     progressTowardsGoalPct,
+    bookValueProgressPct,
     remainingTowardsGoalUsd,
   };
 }

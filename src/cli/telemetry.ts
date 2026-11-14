@@ -18,6 +18,13 @@ const gray = (s: string) => `\x1b[90m${s}\x1b[0m`;
 
 const SEPARATOR = gray('─'.repeat(82));
 
+function formatUsdDelta(val: number, includePlus: boolean = true): string {
+  if (val < 0) {
+    return red(`-$${Math.abs(val).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`);
+  }
+  return green(`${includePlus ? '+' : ''}$${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`);
+}
+
 function renderMultiSegmentBar(
   injectedRatio: number,
   profitRatio: number,
@@ -111,10 +118,9 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
       return { price: p, amount: amt, rescuePct, distUsd };
     });
 
-    // Barra de Progreso Multi-Segmentada al Objetivo $30k
-    const injectedRatio = eq.injectedBaseCapital / eq.targetGoalUsd;
-    const profitRatio = Math.max(0, eq.netRealizedTradingProfit / eq.targetGoalUsd);
-    const goalBar = renderMultiSegmentBar(injectedRatio, profitRatio, 44);
+    // Barra de Progreso hacia el Objetivo $30k (Basada en Saldo Físico Liquidable en Binance)
+    const binanceEquityRatio = Math.min(1.0, eq.totalEquityUsd / eq.targetGoalUsd);
+    const goalBar = renderSimpleBar(binanceEquityRatio, 44, cyan);
 
     // Proximidades Macro
     const nextMacroSell = openSells[openSells.length - 1];
@@ -137,8 +143,18 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
     console.log(
       `🪙 ${bold('SPOT BTC:')} ${yellow('$' + eq.spotBtcPrice.toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' USD')}  │  💰 ${bold('TOTAL EN BINANCE:')} ${green('$' + eq.totalEquityUsd.toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' USD')}`
     );
+    const profitRoiStr = eq.injectedBaseCapital > 0
+      ? `(+${((eq.netRealizedTradingProfit / eq.injectedBaseCapital) * 100).toFixed(1)}% ROI)`
+      : '(+0.0% ROI)';
+    const profitValFmt = eq.netRealizedTradingProfit >= 0
+      ? green('+$' + eq.netRealizedTradingProfit.toFixed(2) + ' USD')
+      : red('-$' + Math.abs(eq.netRealizedTradingProfit).toFixed(2) + ' USD');
     console.log(
-      `📥 ${bold('INYECCIÓN BASE:')} ${blue('$' + eq.injectedBaseCapital.toFixed(2) + ' USD')}  │  📈 ${bold('PROFIT BOT:')} ${eq.netRealizedTradingProfit >= 0 ? green('+$' + eq.netRealizedTradingProfit.toFixed(2)) : red('-$' + Math.abs(eq.netRealizedTradingProfit).toFixed(2))}  │  🚀 ${bold('HODL BTC:')} ${green('+$' + eq.unrealizedFloatingProfit.toFixed(2) + ' USD')}`
+      `📥 ${bold('INYECCIÓN BASE:')} ${blue('$' + eq.injectedBaseCapital.toFixed(2) + ' USD')}  │  📈 ${bold('VALOR GENERADO:')} ${profitValFmt} ${gray(profitRoiStr)}`
+    );
+    const mktDeltaPctStr = `${eq.marketValuationDeltaPct >= 0 ? '+' : ''}${eq.marketValuationDeltaPct.toFixed(1)}%`;
+    console.log(
+      `🏛️ ${bold('BOOK VALUE:')} ${cyan('$' + eq.systemBookValueUsd.toFixed(2) + ' USD')}  │  📉 ${bold('FLUCTUACIÓN MKT (SPOT):')} ${formatUsdDelta(eq.marketValuationDeltaUsd)} ${gray('(' + mktDeltaPctStr + ')')}`
     );
     console.log(
       `📅 ${bold('FILTRO:')} ${cyan('[' + periodLabel + ']')}   │  📊 ${bold('VOLUMEN:')} $${totalPeriodVolume.toFixed(0)} USD  │  🔢 ${bold('TRADES:')} ${filledOrders.length}`
@@ -161,10 +177,10 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
     // SECCIÓN 3: OBJETIVO PATRIMONIAL ($30,000 USD)
     console.log(bold(magenta('🏡 OBJETIVO PATRIMONIAL ($30,000 USD — HACIA EL LADRILLO):')));
     console.log(
-      `[${goalBar}] ${bold(cyan(eq.progressTowardsGoalPct.toFixed(2) + '%'))} ($${eq.totalEquityUsd.toFixed(0)} / $${eq.targetGoalUsd.toLocaleString()} USD)`
+      `[${goalBar}] ${bold(cyan(eq.progressTowardsGoalPct.toFixed(2) + '%'))} ($${eq.totalEquityUsd.toLocaleString('en-US', { maximumFractionDigits: 0 })} / $${eq.targetGoalUsd.toLocaleString()} USD)`
     );
     console.log(
-      `  ${dim('Leyenda:')} ${blue('■ Inyección Base ($' + eq.injectedBaseCapital.toFixed(0) + ')')} │ ${green('■ Profit Bot (+$' + eq.netRealizedTradingProfit.toFixed(0) + ')')} │ ${gray('░ Brecha ($' + eq.remainingTowardsGoalUsd.toFixed(0) + ' USD)')}`
+      `  ${dim('Leyenda:')} ${cyan('■ Saldo Físico Binance ($' + eq.totalEquityUsd.toFixed(0) + ')')} │ ${bold('🏛️ Book Value:')} ${green('$' + eq.systemBookValueUsd.toFixed(0) + ' (' + eq.bookValueProgressPct.toFixed(1) + '%)')} │ ${gray('░ Brecha ($' + eq.remainingTowardsGoalUsd.toFixed(0) + ' USD)')}`
     );
     console.log(SEPARATOR);
 
