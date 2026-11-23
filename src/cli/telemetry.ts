@@ -152,12 +152,8 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
     console.log(
       `📥 ${bold('INYECCIÓN BASE:')} ${blue('$' + eq.injectedBaseCapital.toFixed(2) + ' USD')}  │  📈 ${bold('VALOR GENERADO:')} ${profitValFmt} ${gray(profitRoiStr)}`
     );
-    const mktDeltaPctStr = `${eq.marketValuationDeltaPct >= 0 ? '+' : ''}${eq.marketValuationDeltaPct.toFixed(1)}%`;
     console.log(
-      `🏛️ ${bold('BOOK VALUE:')} ${cyan('$' + eq.systemBookValueUsd.toFixed(2) + ' USD')}  │  📉 ${bold('FLUCTUACIÓN MKT (SPOT):')} ${formatUsdDelta(eq.marketValuationDeltaUsd)} ${gray('(' + mktDeltaPctStr + ')')}`
-    );
-    console.log(
-      `🎯 ${bold('BREAK-EVEN BTC:')} ${yellow('$' + eq.btcBreakEvenPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USD')} ${gray(`(Spot p/ Book Value con ${eq.btcBalance.total.toFixed(4)} BTC)`)}`
+      `🏛️ ${bold('BOOK VALUE:')} ${cyan('$' + eq.systemBookValueUsd.toFixed(2) + ' USD')}  │  🎯 ${bold('RETORNO DE CICLO:')} ${yellow('$78,000 – $84,000 USD')} ${gray(`(≥ $${eq.systemBookValueUsd.toFixed(0)} USD)`)}`
     );
     console.log(
       `📅 ${bold('FILTRO:')} ${cyan('[' + periodLabel + ']')}   │  📊 ${bold('VOLUMEN:')} $${totalPeriodVolume.toFixed(0)} USD  │  🔢 ${bold('TRADES:')} ${filledOrders.length}`
