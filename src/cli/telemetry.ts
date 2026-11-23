@@ -157,6 +157,9 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
       `🏛️ ${bold('BOOK VALUE:')} ${cyan('$' + eq.systemBookValueUsd.toFixed(2) + ' USD')}  │  📉 ${bold('FLUCTUACIÓN MKT (SPOT):')} ${formatUsdDelta(eq.marketValuationDeltaUsd)} ${gray('(' + mktDeltaPctStr + ')')}`
     );
     console.log(
+      `🎯 ${bold('BREAK-EVEN BTC:')} ${yellow('$' + eq.btcBreakEvenPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USD')} ${gray(`(Spot p/ Book Value con ${eq.btcBalance.total.toFixed(4)} BTC)`)}`
+    );
+    console.log(
       `📅 ${bold('FILTRO:')} ${cyan('[' + periodLabel + ']')}   │  📊 ${bold('VOLUMEN:')} $${totalPeriodVolume.toFixed(0)} USD  │  🔢 ${bold('TRADES:')} ${filledOrders.length}`
     );
     console.log(SEPARATOR);

@@ -30,6 +30,7 @@ export interface EquitySummary {
   systemBookValueUsd: number;
   marketValuationDeltaUsd: number;
   marketValuationDeltaPct: number;
+  btcBreakEvenPrice: number;
   totalAccountReturnUsd: number;
   totalAccountReturnPct: number;
   compoundingRunRatePct: number;
@@ -193,6 +194,12 @@ export async function calculateAccountEquity(
     ? Number(((marketValuationDeltaUsd / systemBookValueUsd) * 100).toFixed(2))
     : 0;
 
+  // Precio de Equilibrio (Break-Even BTC Spot):
+  // Precio al que debe cotizar BTC para que el Saldo Físico en Binance iguale al Book Value del Sistema
+  const btcBreakEvenPrice = btcTotal > 0.00001
+    ? Math.max(0, Number(((systemBookValueUsd - usdtTotal - bnbValueUsd) / btcTotal).toFixed(2)))
+    : spotBtcPrice;
+
   const totalAccountReturnUsd = Number((totalEquityUsd - injectedBaseCapital).toFixed(2));
   const unrealizedFloatingProfit = marketValuationDeltaUsd;
   const totalAccountReturnPct = Number(((totalAccountReturnUsd / injectedBaseCapital) * 100).toFixed(2));
@@ -229,6 +236,7 @@ export async function calculateAccountEquity(
     systemBookValueUsd,
     marketValuationDeltaUsd,
     marketValuationDeltaPct,
+    btcBreakEvenPrice,
     totalAccountReturnUsd,
     totalAccountReturnPct,
     compoundingRunRatePct,
