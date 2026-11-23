@@ -118,6 +118,32 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
       return { price: p, amount: amt, rescuePct, distUsd };
     });
 
+    // 6. Cálculo Dinámico del Retorno de Ciclo basado en Órdenes Reales de Venta (Grilla Activa + Bóveda Legacy)
+    const allPendingSells = [
+      ...openSells.map((o) => ({ price: Number(o.price), amount: Number(o.amount) })),
+      ...legacyOrders.map((lo) => ({ price: Number(lo.price), amount: Number(lo.amount) })),
+    ];
+
+    let cycleMinSell = Infinity;
+    let cycleMaxSell = -Infinity;
+    let totalSellBtc = 0;
+    let totalSellNotionalUsd = 0;
+
+    for (const s of allPendingSells) {
+      totalSellBtc += s.amount;
+      totalSellNotionalUsd += s.price * s.amount;
+      if (s.price < cycleMinSell) cycleMinSell = s.price;
+      if (s.price > cycleMaxSell) cycleMaxSell = s.price;
+    }
+
+    const weightedCyclePrice = totalSellBtc > 0 ? totalSellNotionalUsd / totalSellBtc : eq.spotBtcPrice;
+    let cycleRangeStr = '$78,000 – $84,000 USD';
+    if (allPendingSells.length > 0 && cycleMaxSell > 0) {
+      const lowerCycle = Math.round(weightedCyclePrice / 100) * 100;
+      const upperCycle = Math.round(cycleMaxSell / 100) * 100;
+      cycleRangeStr = `$${lowerCycle.toLocaleString('en-US')} – $${upperCycle.toLocaleString('en-US')} USD`;
+    }
+
     // Barra de Progreso hacia el Objetivo $30k (Basada en Saldo Físico Liquidable en Binance)
     const binanceEquityRatio = Math.min(1.0, eq.totalEquityUsd / eq.targetGoalUsd);
     const goalBar = renderSimpleBar(binanceEquityRatio, 44, cyan);
@@ -153,7 +179,7 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
       `📥 ${bold('INYECCIÓN BASE:')} ${blue('$' + eq.injectedBaseCapital.toFixed(2) + ' USD')}  │  📈 ${bold('VALOR GENERADO:')} ${profitValFmt} ${gray(profitRoiStr)}`
     );
     console.log(
-      `🏛️ ${bold('BOOK VALUE:')} ${cyan('$' + eq.systemBookValueUsd.toFixed(2) + ' USD')}  │  🎯 ${bold('RETORNO DE CICLO:')} ${yellow('$78,000 – $84,000 USD')} ${gray(`(≥ $${eq.systemBookValueUsd.toFixed(0)} USD)`)}`
+      `🏛️ ${bold('BOOK VALUE:')} ${cyan('$' + eq.systemBookValueUsd.toFixed(2) + ' USD')}  │  🎯 ${bold('RETORNO DE CICLO:')} ${yellow(cycleRangeStr)} ${gray(`(≥ $${eq.systemBookValueUsd.toFixed(0)} USD)`)}`
     );
     console.log(
       `📅 ${bold('FILTRO:')} ${cyan('[' + periodLabel + ']')}   │  📊 ${bold('VOLUMEN:')} $${totalPeriodVolume.toFixed(0)} USD  │  🔢 ${bold('TRADES:')} ${filledOrders.length}`
