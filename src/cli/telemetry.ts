@@ -179,7 +179,7 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
       `📥 ${bold('INYECCIÓN BASE:')} ${blue('$' + eq.injectedBaseCapital.toFixed(2) + ' USD')}  │  📈 ${bold('VALOR GENERADO:')} ${profitValFmt} ${gray(profitRoiStr)}`
     );
     console.log(
-      `🏛️ ${bold('BOOK VALUE:')} ${cyan('$' + eq.systemBookValueUsd.toFixed(2) + ' USD')}  │  🎯 ${bold('RETORNO DE CICLO:')} ${yellow(cycleRangeStr)} ${gray(`(≥ $${eq.systemBookValueUsd.toFixed(0)} USD)`)}`
+      `🏛️ ${bold('BOOK VALUE:')} ${cyan('$' + eq.systemBookValueUsd.toFixed(2) + ' USD')}  │  ⚡ ${bold('VENTAS ACTIVAS GRILLA:')} ${yellow(cycleRangeStr)}`
     );
     console.log(
       `📅 ${bold('FILTRO:')} ${cyan('[' + periodLabel + ']')}   │  📊 ${bold('VOLUMEN:')} $${totalPeriodVolume.toFixed(0)} USD  │  🔢 ${bold('TRADES:')} ${filledOrders.length}`
