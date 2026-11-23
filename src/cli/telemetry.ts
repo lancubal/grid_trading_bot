@@ -118,31 +118,30 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
       return { price: p, amount: amt, rescuePct, distUsd };
     });
 
-    // 6. Cálculo Dinámico del Retorno de Ciclo basado en Órdenes Reales de Venta (Grilla Activa + Bóveda Legacy)
-    const allPendingSells = [
-      ...openSells.map((o) => ({ price: Number(o.price), amount: Number(o.amount) })),
-      ...legacyOrders.map((lo) => ({ price: Number(lo.price), amount: Number(lo.amount) })),
-    ];
+    // 6. Cálculo Dinámico del Retorno de Ciclo Macro
+    // Representa el rango donde el inventario del ciclo neutraliza la caída y materializa el Book Value
+    const cycleAgg = await prisma.order.aggregate({
+      where: { side: 'BUY', status: 'FILLED' },
+      _avg: { price: true },
+      _max: { price: true },
+    }).catch(() => null);
 
-    let cycleMinSell = Infinity;
-    let cycleMaxSell = -Infinity;
-    let totalSellBtc = 0;
-    let totalSellNotionalUsd = 0;
+    let cycleLower = 75700;
+    let cycleUpper = 86700;
 
-    for (const s of allPendingSells) {
-      totalSellBtc += s.amount;
-      totalSellNotionalUsd += s.price * s.amount;
-      if (s.price < cycleMinSell) cycleMinSell = s.price;
-      if (s.price > cycleMaxSell) cycleMaxSell = s.price;
+    if (cycleAgg && cycleAgg._avg.price && cycleAgg._max.price) {
+      cycleLower = Math.round(Number(cycleAgg._avg.price) / 100) * 100;
+      cycleUpper = Math.round(Number(cycleAgg._max.price) / 100) * 100;
     }
 
-    const weightedCyclePrice = totalSellBtc > 0 ? totalSellNotionalUsd / totalSellBtc : eq.spotBtcPrice;
-    let cycleRangeStr = '$78,000 – $84,000 USD';
-    if (allPendingSells.length > 0 && cycleMaxSell > 0) {
-      const lowerCycle = Math.round(weightedCyclePrice / 100) * 100;
-      const upperCycle = Math.round(cycleMaxSell / 100) * 100;
-      cycleRangeStr = `$${lowerCycle.toLocaleString('en-US')} – $${upperCycle.toLocaleString('en-US')} USD`;
+    // Considerar órdenes legacy de alta cotización si existieran
+    const highLegacySells = legacyOrders.filter((lo) => Number(lo.price) > cycleLower);
+    if (highLegacySells.length > 0) {
+      const maxLegacy = Math.max(...highLegacySells.map((lo) => Number(lo.price)));
+      cycleUpper = Math.max(cycleUpper, Math.round(maxLegacy / 100) * 100);
     }
+
+    const cycleRangeStr = `$${cycleLower.toLocaleString('en-US')} – $${cycleUpper.toLocaleString('en-US')} USD`;
 
     // Barra de Progreso hacia el Objetivo $30k (Basada en Saldo Físico Liquidable en Binance)
     const binanceEquityRatio = Math.min(1.0, eq.totalEquityUsd / eq.targetGoalUsd);
@@ -179,7 +178,7 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
       `📥 ${bold('INYECCIÓN BASE:')} ${blue('$' + eq.injectedBaseCapital.toFixed(2) + ' USD')}  │  📈 ${bold('VALOR GENERADO:')} ${profitValFmt} ${gray(profitRoiStr)}`
     );
     console.log(
-      `🏛️ ${bold('BOOK VALUE:')} ${cyan('$' + eq.systemBookValueUsd.toFixed(2) + ' USD')}  │  ⚡ ${bold('VENTAS ACTIVAS GRILLA:')} ${yellow(cycleRangeStr)}`
+      `🏛️ ${bold('BOOK VALUE:')} ${cyan('$' + eq.systemBookValueUsd.toFixed(2) + ' USD')}  │  🎯 ${bold('RETORNO DE CICLO:')} ${yellow(cycleRangeStr)} ${gray('(≥ $' + eq.systemBookValueUsd.toFixed(0) + ' USD)')}`
     );
     console.log(
       `📅 ${bold('FILTRO:')} ${cyan('[' + periodLabel + ']')}   │  📊 ${bold('VOLUMEN:')} $${totalPeriodVolume.toFixed(0)} USD  │  🔢 ${bold('TRADES:')} ${filledOrders.length}`
