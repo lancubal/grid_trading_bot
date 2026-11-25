@@ -119,5 +119,6 @@ describe('setupDailyReportCron - Daily Summary Audit & Legacy Vault Reporting', 
     expect(capturedSummary.legacyVault.openOrdersCount).toBe(2);
     expect(capturedSummary.legacyVault.totalBtc).toBe(0.025);
     expect(capturedSummary.legacyVault.fillsCompletedYesterday).toBe(1);
+    expect(capturedSummary.legacyVault.netProfitYesterday).toBeGreaterThan(0);
   });
 });

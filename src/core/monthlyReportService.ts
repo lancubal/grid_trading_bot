@@ -125,12 +125,30 @@ export async function syncAndFetchMonthlyReports(
   const curYear = now.getUTCFullYear();
   const curMonth = now.getUTCMonth() + 1; // 1-12
 
-  // 1. Obtener todas las órdenes ejecutadas ordenadas cronológicamente
-  const allFills = await prisma.order.findMany({
-    where: { status: 'FILLED' },
-    orderBy: { updatedAt: 'asc' },
-    select: { side: true, price: true, amount: true, fee: true, updatedAt: true },
-  }).catch(() => []);
+  // 1. Obtener todas las órdenes ejecutadas (Grilla Activa + Bóveda Legacy) ordenadas cronológicamente
+  const [gridFills, legacyFills] = await Promise.all([
+    prisma.order.findMany({
+      where: { status: 'FILLED' },
+      orderBy: { updatedAt: 'asc' },
+      select: { side: true, price: true, amount: true, fee: true, updatedAt: true },
+    }).catch(() => []),
+    prisma.legacyOrder.findMany({
+      where: { status: 'FILLED' },
+      orderBy: { updatedAt: 'asc' },
+      select: { side: true, price: true, amount: true, feeCost: true, feeCurrency: true, updatedAt: true },
+    }).catch(() => []),
+  ]);
+
+  const allFills = [
+    ...gridFills,
+    ...legacyFills.map((lo) => ({
+      side: lo.side || 'SELL',
+      price: lo.price,
+      amount: lo.amount,
+      fee: lo.feeCurrency?.toUpperCase() === 'BNB' ? null : lo.feeCost,
+      updatedAt: lo.updatedAt,
+    })),
+  ].sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime());
 
   // 2. Calcular estadísticas mensuales con inventario FIFO continuo
   const monthStatsMap = calculateContinuousMonthlyStats(allFills);

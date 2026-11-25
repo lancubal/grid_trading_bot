@@ -166,6 +166,12 @@ export async function calculateAccountEquity(
     orderBy: { updatedAt: 'asc' },
   }).catch(() => []);
 
+  const filledLegacyOrders = await prisma.legacyOrder.findMany({
+    where: filledWhere,
+    orderBy: { updatedAt: 'asc' },
+  }).catch(() => []);
+
+  const defaultStepSpread = 850.0;
   let periodBuyVol = 0;
   let periodSellVol = 0;
   let periodFeesPaid = 0;
@@ -182,9 +188,20 @@ export async function calculateAccountEquity(
     } else {
       periodSellVol += notional;
       // Ganancia de la grilla por venta = stepSize (~$850) * amount
-      const defaultStepSpread = 850.0;
       grossRealizedProfit += defaultStepSpread * amount;
     }
+  }
+
+  // Sumar ganancias netas de las ventas ejecutadas de la Bóveda Legacy al Valor Generado
+  for (const leg of filledLegacyOrders) {
+    const price = Number(leg.price);
+    const amount = Number(leg.amount);
+    const notional = price * amount;
+    const isBnbFee = leg.feeCurrency?.toUpperCase() === 'BNB';
+    const fee = (!isBnbFee && leg.feeCost) ? Number(leg.feeCost) : notional * 0.00075;
+    periodFeesPaid += fee;
+    periodSellVol += notional;
+    grossRealizedProfit += defaultStepSpread * amount;
   }
 
   const netRealizedTradingProfit = Number((grossRealizedProfit - periodFeesPaid).toFixed(2));

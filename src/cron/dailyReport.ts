@@ -60,12 +60,22 @@ export function setupDailyReportCron(
         }
       }
 
-      // 2. Métricas de la Bóveda Legacy
+      // 2. Métricas de la Bóveda Legacy (sus ventas cerradas también generan profit de spread)
       let legacyRecoveredUsdt = new Decimal(0);
+      let legacyNetProfitUsd = new Decimal(0);
       for (const leg of filledLegacyOrders) {
-        const legVol = new Decimal(leg.price).times(new Decimal(leg.amount));
-        const legFee = leg.feeCost ? new Decimal(leg.feeCost) : legVol.times(0.00075);
+        const legAmt = new Decimal(leg.amount);
+        const legVol = new Decimal(leg.price).times(legAmt);
+        const isBnbFee = leg.feeCurrency?.toUpperCase() === 'BNB';
+        const legFee = (!isBnbFee && leg.feeCost) ? new Decimal(leg.feeCost) : legVol.times(0.00075);
         legacyRecoveredUsdt = legacyRecoveredUsdt.plus(legVol.minus(legFee));
+
+        const legGrossProfit = stepSize.times(legAmt);
+        const legProfit = Decimal.max(0.005, legGrossProfit.minus(legFee));
+        legacyNetProfitUsd = legacyNetProfitUsd.plus(legProfit);
+        netProfitUsd = netProfitUsd.plus(legProfit);
+        totalVolumeUsd = totalVolumeUsd.plus(legVol);
+        totalFeesUsd = totalFeesUsd.plus(legFee);
       }
 
       let openLegacyBtc = new Decimal(0);
@@ -119,6 +129,7 @@ export function setupDailyReportCron(
           totalUsdValue: openLegacyUsdValue.toNumber(),
           fillsCompletedYesterday: filledLegacyOrders.length,
           recoveredUsdtYesterday: legacyRecoveredUsdt.toNumber(),
+          netProfitYesterday: legacyNetProfitUsd.toNumber(),
         },
       };
 

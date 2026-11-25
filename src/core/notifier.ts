@@ -17,6 +17,7 @@ export interface LegacyOrderNotificationData {
   amount: Decimal | number;
   price: Decimal | number;
   recoveredUsdt: Decimal | number;
+  netProfitUsd?: Decimal | number;
   usdtBalance?: Decimal | number;
   gridLevel?: number;
   feeCurrency?: string;
@@ -44,6 +45,7 @@ export interface DailySummaryData {
     totalUsdValue: number;
     fillsCompletedYesterday: number;
     recoveredUsdtYesterday: number;
+    netProfitYesterday?: number;
   };
 }
 
@@ -88,7 +90,11 @@ export class SlackNotifier {
         : ` | Fee: ${feeCostStr} ${data.feeCurrency}`;
     }
 
-    const text = `🏛️ *VENTA LEGACY EJECUTADA*: ${amountStr} ${symbol.split('/')[0]} @ $${priceStr} USD | Capital recuperado: *+${recoveredStr}* | Saldo USDT libre: ${usdtStr}${feeText}`;
+    const profitText = data.netProfitUsd !== undefined
+      ? ` | Profit Neto: *+$${new Decimal(data.netProfitUsd).toFixed(2)} USD*`
+      : '';
+
+    const text = `🏛️ *VENTA LEGACY EJECUTADA*: ${amountStr} ${symbol.split('/')[0]} @ $${priceStr} USD${profitText} | Capital recuperado: *+${recoveredStr}* | Saldo USDT libre: ${usdtStr}${feeText}`;
     return this.sendSlackMessage(text);
   }
 
@@ -132,11 +138,14 @@ export class SlackNotifier {
 
     let legacyText = '';
     if (summary.legacyVault.openOrdersCount > 0 || summary.legacyVault.fillsCompletedYesterday > 0) {
+      const legacyProfitStr = summary.legacyVault.netProfitYesterday !== undefined
+        ? ` | Profit Neto: *+$${summary.legacyVault.netProfitYesterday.toFixed(2)} USD*`
+        : '';
       legacyText =
         `\n\n🏛️ *ESTADO DE LA BÓVEDA LEGACY*\n` +
         `• *Órdenes en Custodia:* ${summary.legacyVault.openOrdersCount} órdenes GTC activas\n` +
         `• *Inventario Retenido:* ${summary.legacyVault.totalBtc.toFixed(6)} BTC (~$${summary.legacyVault.totalUsdValue.toFixed(2)} USD)\n` +
-        `• *Ventas Legacy Ejecutadas Ayer:* ${summary.legacyVault.fillsCompletedYesterday} orden(es) (+$${summary.legacyVault.recoveredUsdtYesterday.toFixed(2)} USDT recuperados a caja)`;
+        `• *Ventas Legacy Ejecutadas Ayer:* ${summary.legacyVault.fillsCompletedYesterday} orden(es) (+$${summary.legacyVault.recoveredUsdtYesterday.toFixed(2)} USDT recuperados${legacyProfitStr})`;
     } else {
       legacyText = `\n\n🏛️ *ESTADO DE LA BÓVEDA LEGACY*\n• *Bóveda Vacía:* 0 órdenes retenidas`;
     }

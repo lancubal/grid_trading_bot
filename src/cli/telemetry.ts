@@ -89,20 +89,26 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
     const openBuys = openOrders.filter((o) => o.side === 'BUY');
     const openSells = openOrders.filter((o) => o.side === 'SELL');
 
-    // 4. Fills del período seleccionado
+    // 4. Fills del período seleccionado (Grilla Activa + Ventas Legacy)
     const filledWhere: any = { status: 'FILLED' };
     if (sinceDate) {
       filledWhere.updatedAt = { gte: sinceDate };
     }
-    const filledOrders = await prisma.order.findMany({
-      where: filledWhere,
-      select: { price: true, amount: true, fee: true },
-    }).catch(() => []);
+    const [filledOrders, filledLegacyOrders] = await Promise.all([
+      prisma.order.findMany({
+        where: filledWhere,
+        select: { price: true, amount: true, fee: true },
+      }).catch(() => []),
+      prisma.legacyOrder.findMany({
+        where: filledWhere,
+        select: { price: true, amount: true },
+      }).catch(() => []),
+    ]);
 
-    const totalPeriodVolume = filledOrders.reduce(
-      (acc, f) => acc + Number(f.price) * Number(f.amount),
-      0
-    );
+    const totalPeriodVolume =
+      filledOrders.reduce((acc, f) => acc + Number(f.price) * Number(f.amount), 0) +
+      filledLegacyOrders.reduce((acc, f) => acc + Number(f.price) * Number(f.amount), 0);
+    const totalPeriodTrades = filledOrders.length + filledLegacyOrders.length;
 
     // 5. Bóveda Legacy
     const legacyOrders = await prisma.legacyOrder.findMany({
@@ -181,7 +187,7 @@ export async function runTelemetry(isWatch: boolean = false, args: string[] = []
       `🏛️ ${bold('BOOK VALUE:')} ${cyan('$' + eq.systemBookValueUsd.toFixed(2) + ' USD')}  │  🎯 ${bold('RETORNO DE CICLO:')} ${yellow(cycleRangeStr)} ${gray('(≥ $' + eq.systemBookValueUsd.toFixed(0) + ' USD)')}`
     );
     console.log(
-      `📅 ${bold('FILTRO:')} ${cyan('[' + periodLabel + ']')}   │  📊 ${bold('VOLUMEN:')} $${totalPeriodVolume.toFixed(0)} USD  │  🔢 ${bold('TRADES:')} ${filledOrders.length}`
+      `📅 ${bold('FILTRO:')} ${cyan('[' + periodLabel + ']')}   │  📊 ${bold('VOLUMEN:')} $${totalPeriodVolume.toFixed(0)} USD  │  🔢 ${bold('TRADES:')} ${totalPeriodTrades}`
     );
     console.log(SEPARATOR);
 

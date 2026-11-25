@@ -341,21 +341,29 @@ async function main() {
         }
 
         const grossVal = new Decimal(event.amount).times(new Decimal(event.price));
-        const feeUsd = event.fee?.cost ? new Decimal(event.fee.cost) : grossVal.times(0.001);
+        const isBnbFee = event.fee?.currency?.toUpperCase() === 'BNB';
+        const feeUsd = (!isBnbFee && event.fee?.cost)
+          ? new Decimal(event.fee.cost)
+          : grossVal.times(0.00075);
         const netRecovered = grossVal.minus(feeUsd);
+
+        const stepSize = gridManager.getStepSize();
+        const legacyGrossProfit = stepSize.times(new Decimal(event.amount));
+        const legacyNetProfitUsd = Decimal.max(0.005, legacyGrossProfit.minus(feeUsd));
 
         await notifier.notifyLegacyOrderExecution({
           symbol,
           amount: event.amount,
           price: event.price,
           recoveredUsdt: netRecovered,
+          netProfitUsd: legacyNetProfitUsd,
           gridLevel: legacyOrder.originalGridLevelId ?? undefined,
           feeCurrency: event.fee?.currency,
           feeCost: event.fee?.cost,
           usdtBalance: currentUsdtBal,
         });
 
-        console.log(`[Legacy Vault Fill Complete] 💰 Recuperados $${netRecovered.toFixed(2)} USDT a la caja líquida desde la Bóveda Legacy.`);
+        console.log(`[Legacy Vault Fill Complete] 💰 Recuperados $${netRecovered.toFixed(2)} USDT (Profit Neto: +$${legacyNetProfitUsd.toFixed(2)} USD) a la caja líquida desde la Bóveda Legacy.`);
         return;
       }
 

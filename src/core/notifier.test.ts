@@ -64,6 +64,7 @@ describe('SlackNotifier - Observability & Babysitting Tests', () => {
       amount: 0.00009,
       price: 63554.7,
       recoveredUsdt: 5.71,
+      netProfitUsd: 0.07,
       usdtBalance: 50.2,
     });
 
